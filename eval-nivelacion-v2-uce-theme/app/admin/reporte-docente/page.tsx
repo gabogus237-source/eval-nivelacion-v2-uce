@@ -2,27 +2,25 @@
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
 
-import { Suspense, useEffect, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
-export default function ReporteDocentePage() {
-  // ⬇️ La página se limita a mostrar un Suspense que envuelve al componente que usa useSearchParams
-  return (
-    <Suspense fallback={<main className="py-10">Cargando…</main>}>
-      <ReporteDocenteInner />
-    </Suspense>
-  );
-}
-
-function ReporteDocenteInner() {
-  const search = useSearchParams();
-  const nombre = decodeURIComponent(search.get('nombre') ?? '');
-  const autoPrint = search.get('print') === '1';
+export default function ReporteDocente() {
+  // Leemos los query params desde el navegador (sin useSearchParams)
+  const [nombre, setNombre] = useState<string>('');
+  const [autoPrint, setAutoPrint] = useState<boolean>(false);
 
   const [allowed, setAllowed] = useState<boolean | null>(null);
   const [row, setRow] = useState<any>(null);
 
+  // 1) Obtener ?nombre y ?print del URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setNombre(decodeURIComponent(params.get('nombre') ?? ''));
+    setAutoPrint(params.get('print') === '1');
+  }, []);
+
+  // 2) Verificar admin y cargar datos
   useEffect(() => {
     (async () => {
       const { data: auth } = await supabase.auth.getUser();
@@ -43,6 +41,7 @@ function ReporteDocenteInner() {
     })();
   }, [nombre]);
 
+  // 3) Auto-imprimir si ?print=1
   useEffect(() => {
     if (autoPrint) {
       const t = setTimeout(() => window.print(), 400);
@@ -79,4 +78,19 @@ function ReporteDocenteInner() {
 
       <section>
         <h2 className="text-lg font-semibold mt-4">Aspectos a mejorar (Bottom 3)</h2>
-        <ul className="list-disc pl-6 text-sm
+        <ul className="list-disc pl-6 text-sm">
+          {(row.aspectos_mejora ?? []).map((t: string, i: number) => <li key={i}>{t}</li>)}
+        </ul>
+      </section>
+
+      <style jsx global>{`
+        @page { size: A4; margin: 16mm; }
+        @media print {
+          .no-print, nav, header, footer { display: none !important; }
+          .print-block { break-inside: avoid; page-break-inside: avoid; }
+          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        }
+      `}</style>
+    </main>
+  );
+}
