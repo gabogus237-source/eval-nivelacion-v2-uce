@@ -99,14 +99,15 @@ export default function Admin() {
                 <td className="p-2">{fmt(r.promedio)}</td>
                 <td className="p-2 font-semibold">{fmt(r.calificacion_100)}</td>
                 <td className="p-2 flex gap-3">
+                  {/* ⬇️ enlaces actualizados */}
                   <a
-                    href={`/admin/reporte-docente/${encodeURIComponent(r.nombre)}`}
+                    href={`/admin/reporte-docente?nombre=${encodeURIComponent(r.nombre)}`}
                     className="underline"
                   >
                     Ver
                   </a>
                   <a
-                    href={`/admin/reporte-docente/${encodeURIComponent(r.nombre)}?print=1`}
+                    href={`/admin/reporte-docente?nombre=${encodeURIComponent(r.nombre)}&print=1`}
                     target="_blank"
                     rel="noopener"
                     className="underline"
