@@ -6,21 +6,18 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
 export default function ReporteDocente() {
-  // Leemos los query params desde el navegador (sin useSearchParams)
   const [nombre, setNombre] = useState<string>('');
   const [autoPrint, setAutoPrint] = useState<boolean>(false);
 
   const [allowed, setAllowed] = useState<boolean | null>(null);
   const [row, setRow] = useState<any>(null);
 
-  // 1) Obtener ?nombre y ?print del URL
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     setNombre(decodeURIComponent(params.get('nombre') ?? ''));
     setAutoPrint(params.get('print') === '1');
   }, []);
 
-  // 2) Verificar admin y cargar datos
   useEffect(() => {
     (async () => {
       const { data: auth } = await supabase.auth.getUser();
@@ -33,7 +30,7 @@ export default function ReporteDocente() {
         const { data } = await supabase
           .from('reporte_docente_detallado')
           .select('*')
-          .ilike('nombre', nombre) // tolerante a mayúsculas/tildes
+          .ilike('nombre', nombre)
           .limit(1)
           .maybeSingle();
         setRow(data);
@@ -41,7 +38,6 @@ export default function ReporteDocente() {
     })();
   }, [nombre]);
 
-  // 3) Auto-imprimir si ?print=1
   useEffect(() => {
     if (autoPrint) {
       const t = setTimeout(() => window.print(), 400);
@@ -82,15 +78,7 @@ export default function ReporteDocente() {
           {(row.aspectos_mejora ?? []).map((t: string, i: number) => <li key={i}>{t}</li>)}
         </ul>
       </section>
-
-      <style jsx global>{`
-        @page { size: A4; margin: 16mm; }
-        @media print {
-          .no-print, nav, header, footer { display: none !important; }
-          .print-block { break-inside: avoid; page-break-inside: avoid; }
-          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        }
-      `}</style>
     </main>
   );
 }
+
