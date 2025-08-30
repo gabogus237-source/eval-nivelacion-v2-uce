@@ -1,4 +1,6 @@
 'use client';
+export const dynamic = 'force-dynamic';
+
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
@@ -71,15 +73,6 @@ export default function ReporteDocente() {
           {(row.aspectos_mejora ?? []).map((t: string, i: number) => <li key={i}>{t}</li>)}
         </ul>
       </section>
-
-      <style jsx global>{`
-        @page { size: A4; margin: 16mm; }
-        @media print {
-          .no-print, nav, header, footer { display: none !important; }
-          .print-block { break-inside: avoid; page-break-inside: avoid; }
-          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        }
-      `}</style>
     </main>
   );
 }
