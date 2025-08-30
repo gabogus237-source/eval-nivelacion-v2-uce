@@ -1,13 +1,21 @@
-// ping deploy
-
 'use client';
 export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 
-export default function ReporteDocente() {
+export default function ReporteDocentePage() {
+  // ⬇️ La página se limita a mostrar un Suspense que envuelve al componente que usa useSearchParams
+  return (
+    <Suspense fallback={<main className="py-10">Cargando…</main>}>
+      <ReporteDocenteInner />
+    </Suspense>
+  );
+}
+
+function ReporteDocenteInner() {
   const search = useSearchParams();
   const nombre = decodeURIComponent(search.get('nombre') ?? '');
   const autoPrint = search.get('print') === '1';
@@ -71,10 +79,4 @@ export default function ReporteDocente() {
 
       <section>
         <h2 className="text-lg font-semibold mt-4">Aspectos a mejorar (Bottom 3)</h2>
-        <ul className="list-disc pl-6 text-sm">
-          {(row.aspectos_mejora ?? []).map((t: string, i: number) => <li key={i}>{t}</li>)}
-        </ul>
-      </section>
-    </main>
-  );
-}
+        <ul className="list-disc pl-6 text-sm
