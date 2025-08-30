@@ -42,13 +42,18 @@ export default function Evaluacion() {
   function setNA(docente_id:number, val:boolean) {
     setRespuestas(prev => ({ ...prev, [docente_id]: { ...prev[docente_id], no_aplica: val } }));
   }
-  function setQ(docente_id:number, q:number, v:number) {
-    setRespuestas(prev => ({ ...prev, [docente_id], respuestas: { ...prev[docente_id].respuestas, ['q'+q]: v } }));
-  }
-  function setText(docente_id:number, field:'lo_mejor'|'a_mejorar', v:string) {
-    setRespuestas(prev => ({ ...prev, [docente_id]: { ...prev[docente_id], [field]: v } }));
-  }
-
+  function setQ(docente_id: number, q: number, v: number) {
+  setRespuestas(prev => ({
+    ...prev,
+    [docente_id]: {
+      ...prev[docente_id],
+      respuestas: {
+        ...(prev[docente_id]?.respuestas ?? {}),
+        ['q' + q]: v
+      }
+    }
+  }));
+}
   function validoTodo(): { ok:boolean, msg?:string } {
     if (!modalidad) return { ok:false, msg:'Selecciona modalidad' };
     if (!curso) return { ok:false, msg:'Selecciona curso' };
