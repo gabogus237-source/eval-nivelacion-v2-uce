@@ -1,22 +1,25 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 
 export default function ReporteDocente({ params }: { params: { nombre: string } }) {
   const [allowed, setAllowed] = useState<boolean | null>(null);
   const [row, setRow] = useState<any>(null);
+  const search = useSearchParams();
   const nombre = decodeURIComponent(params.nombre);
 
   useEffect(() => {
     (async () => {
-      // mismo control de acceso que usas en /admin
       const { data: auth } = await supabase.auth.getUser();
       const email = auth.user?.email ?? '';
-      setAllowed(email === 'msaltos@uce.edu.ec');
+      const admins = ['msaltos@uce.edu.ec', 'gghermosa@uce.edu.ec'];
+      setAllowed(admins.includes(email));
 
-      if (email === 'msaltos@uce.edu.ec') {
+      if (admins.includes(email)) {
+        // Busca por nombre exacto; si lo prefieres tolerante, usa .ilike('nombre', nombre).limit(1)
         const { data } = await supabase
-          .from('reporte_docente_detallado') // vista SQL con promedio, /100, fortalezas, mejoras
+          .from('reporte_docente_detallado')
           .select('*')
           .eq('nombre', nombre)
           .maybeSingle();
@@ -24,6 +27,14 @@ export default function ReporteDocente({ params }: { params: { nombre: string } 
       }
     })();
   }, [nombre]);
+
+  // Auto-imprimir si viene ?print=1
+  useEffect(() => {
+    if (search.get('print') === '1') {
+      const t = setTimeout(() => window.print(), 400);
+      return () => clearTimeout(t);
+    }
+  }, [search]);
 
   if (allowed === null) return <main className="py-10">Cargando…</main>;
   if (!allowed) return <main className="py-10">Acceso restringido.</main>;
