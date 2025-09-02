@@ -6,7 +6,7 @@ export default function Header() {
           <img src="/logo.svg" alt="UCE" className="h-8 w-8" />
           <div>
             <div className="kicker text-uce-gold">Universidad Central del Ecuador</div>
-            <div className="font-semibold">Evaluación Docente — Nivelación</div>
+            <div className="font-semibold">Evaluación Docente — Nivelación 1S-2025-2025</div>
           </div>
         </div>
         <span className="badge">Periodo actual</span>
