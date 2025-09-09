@@ -6,13 +6,15 @@ import { supabase } from '@/lib/supabaseClient';
 /** ===== Tipos ===== */
 type Rol = 'estudiante' | 'auto_docente' | 'coord_asignatura' | 'coord_nivelacion';
 type Item = {
-  pregunta_id: number;     // <-- antes tenías item_id; la RPC devuelve pregunta_id
+  pregunta_id: number;     // <-- la RPC devuelve pregunta_id
   categoria: string;
   pregunta: string;
   orden: number;
   escala_min: number;
   escala_max: number;
 };
+
+type VoidArgs = Record<string, never>; // para RPC sin argumentos
 
 /** ===== Login inline (Magic Link) ===== */
 function InlineMagicLink() {
@@ -81,7 +83,7 @@ function FormByRole({
 }) {
   const [items, setItems] = useState<Item[] | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showLogin, setShowLogin] = useState(false);      // <-- NUEVO
+  const [showLogin, setShowLogin] = useState(false);
   const [vals, setVals] = useState<Record<number, number>>({});
   const [modalidad, setModalidad] = useState('');
   const [cursoId, setCursoId] = useState('');
@@ -107,9 +109,12 @@ function FormByRole({
         return;
       }
 
-      // 2) traer preguntas por rol/periodo desde la RPC correcta
+      // 2) traer preguntas por rol/periodo desde la RPC tipada
       const periodo = '2025-2025';
-      const { data, error } = await supabase.rpc('get_preguntas_para', {
+      const { data, error } = await supabase.rpc<
+        Item[],
+        { rol_in: Rol; periodo_in: string }
+      >('get_preguntas_para', {
         rol_in: role,
         periodo_in: periodo,
       });
@@ -119,16 +124,20 @@ function FormByRole({
         console.error('RPC get_preguntas_para error:', error);
         setItems([]);
       } else {
-        setItems((data ?? []) as Item[]);
+        setItems(data ?? []);
       }
       setLoading(false);
     })();
-    return () => { on = false; };
+    return () => {
+      on = false;
+    };
   }, [role]);
 
   const porCategoria = useMemo(() => {
     const g: Record<string, Item[]> = {};
-    (items ?? []).forEach((it) => { (g[it.categoria] ||= []).push(it); });
+    (items ?? []).forEach((it) => {
+      (g[it.categoria] ||= []).push(it);
+    });
     return g;
   }, [items]);
 
@@ -165,7 +174,7 @@ function FormByRole({
 
   // ===== Render =====
   if (loading) return <div className="p-4">Cargando preguntas…</div>;
-  if (showLogin) return <InlineMagicLink />; // <-- si no hay sesión, mostramos login
+  if (showLogin) return <InlineMagicLink />; // si no hay sesión, mostramos login
   if (!items || items.length === 0)
     return <div className="p-4">No hay preguntas para este instrumento.</div>;
 
@@ -233,7 +242,7 @@ function FormByRole({
                         <label key={v} className="inline-flex items-center gap-1">
                           <input
                             type="radio"
-                            name={`item-${it.pregunta_id}`}   // <-- usa pregunta_id
+                            name={`item-${it.pregunta_id}`}
                             value={v}
                             checked={vals[it.pregunta_id] === v}
                             onChange={(e) => setValor(it.pregunta_id, e.target.value)}
@@ -304,7 +313,7 @@ export default function Page() {
       }
 
       // Institucional: intenta leer roles reales (si falla, cae a estudiante)
-      const { data, error } = await supabase.rpc<Rol[]>('api_current_roles');
+      const { data, error } = await supabase.rpc<Rol[], VoidArgs>('api_current_roles', {});
       if (!alive) return;
       if (error) {
         console.error(error);
@@ -313,7 +322,9 @@ export default function Page() {
         setRoles((data ?? []) as Rol[]);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
   if (!roles) return <main className="p-6">Cargando…</main>;
