@@ -1,11 +1,12 @@
 'use client';
+
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
 /** ===== Tipos ===== */
 type Rol = 'estudiante' | 'auto_docente' | 'coord_asignatura' | 'coord_nivelacion';
 type Item = {
-  item_id: number;
+  pregunta_id: number; // la RPC devuelve pregunta_id
   categoria: string;
   pregunta: string;
   orden: number;
@@ -13,20 +14,80 @@ type Item = {
   escala_max: number;
 };
 
+type VoidArgs = Record<string, never>; // para RPC sin argumentos
+
+/** ===== Login inline (Magic Link) ===== */
+function InlineMagicLink() {
+  const [email, setEmail] = useState('');
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (!/@uce\.edu\.ec$/i.test(email.trim())) {
+      setError('Usa tu correo institucional @uce.edu.ec');
+      return;
+    }
+    const redirectTo = window.location.origin;
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim().toLowerCase(),
+      options: { emailRedirectTo: redirectTo },
+    });
+    if (error) setError(error.message);
+    else setSent(true);
+  };
+
+  if (sent) {
+    return (
+      <div className="max-w-md mx-auto p-6 bg-white rounded-2xl shadow">
+        <h1 className="text-xl font-semibold mb-2">Revisa tu correo</h1>
+        <p>
+          Te enviamos un enlace a tu <b>@uce.edu.ec</b>. Ábrelo para iniciar sesión.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-md mx-auto p-6 bg-white rounded-2xl shadow">
+      <h1 className="text-xl font-semibold mb-4">Inicia sesión</h1>
+      <p className="text-sm mb-4">
+        Usa tu correo institucional <b>@uce.edu.ec</b>.
+      </p>
+      <form onSubmit={submit} className="space-y-3">
+        <input
+          type="email"
+          placeholder="tu_correo@uce.edu.ec"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="w-full border rounded-xl p-3"
+          required
+        />
+        {error && <p className="text-red-600 text-sm">{error}</p>}
+        <button type="submit" className="w-full rounded-xl p-3 bg-black text-white">
+          Enviarme enlace mágico
+        </button>
+      </form>
+    </div>
+  );
+}
+
 /** ===== Formulario genérico por rol ===== */
 function FormByRole({
   role,
-  slug, // ← ya no se usa, lo dejamos para no romper llamadas existentes
+  _slug, // (no usado) se mantiene por compatibilidad
   target = null,
   title,
 }: {
   role: Rol;
-  slug: string;
+  _slug: string;
   target?: 'docente' | 'coord' | null;
   title: string;
 }) {
   const [items, setItems] = useState<Item[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showLogin, setShowLogin] = useState(false);
   const [vals, setVals] = useState<Record<number, number>>({});
   const [modalidad, setModalidad] = useState('');
   const [cursoId, setCursoId] = useState('');
@@ -36,36 +97,51 @@ function FormByRole({
   const [aMejorar, setAMejorar] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
 
-  // ✅ Carga preguntas SOLO por rol (sin slug) + LOG de depuración
+  // ✅ Carga preguntas SOLO por rol, y SOLO si hay sesión
   useEffect(() => {
     let on = true;
     (async () => {
       setLoading(true);
-      const { data, error } = await supabase.rpc('api_items_por_rol', { p_rol: role });
 
-      // 🔎 LOG: mira la consola del navegador (F12 → Console)
-      console.log('RPC api_items_por_rol →', {
-        role,
-        len: Array.isArray(data) ? data.length : null,
-        error,
-        sample: Array.isArray(data) ? data.slice(0, 3) : null
+      // 1) verificar sesión
+      const { data: s } = await supabase.auth.getSession();
+      if (!on) return;
+      if (!s?.session) {
+        setShowLogin(true);
+        setItems(null);
+        setLoading(false);
+        return;
+      }
+
+      // 2) traer preguntas por rol/periodo desde la RPC tipada
+      const periodo = '2025-2025';
+      const { data, error } = await supabase.rpc<
+        Item[],
+        { rol_in: Rol; periodo_in: string }
+      >('get_preguntas_para', {
+        rol_in: role,
+        periodo_in: periodo,
       });
 
       if (!on) return;
       if (error) {
-        console.error(error);
+        console.error('RPC get_preguntas_para error:', error);
         setItems([]);
       } else {
-        setItems((data ?? []) as Item[]);
+        setItems(data ?? []);
       }
       setLoading(false);
     })();
-    return () => { on = false; };
+    return () => {
+      on = false;
+    };
   }, [role]);
 
   const porCategoria = useMemo(() => {
     const g: Record<string, Item[]> = {};
-    (items ?? []).forEach((it) => { (g[it.categoria] ||= []).push(it); });
+    (items ?? []).forEach((it) => {
+      (g[it.categoria] ||= []).push(it);
+    });
     return g;
   }, [items]);
 
@@ -100,7 +176,9 @@ function FormByRole({
     }
   };
 
+  // ===== Render =====
   if (loading) return <div className="p-4">Cargando preguntas…</div>;
+  if (showLogin) return <InlineMagicLink />; // si no hay sesión, mostramos login
   if (!items || items.length === 0)
     return <div className="p-4">No hay preguntas para este instrumento.</div>;
 
@@ -159,7 +237,7 @@ function FormByRole({
             <h3 className="font-semibold mb-3">{cat}</h3>
             <div className="space-y-3">
               {arr.map((it) => (
-                <div key={it.item_id} className="grid md:grid-cols-2 gap-2 items-center">
+                <div key={it.pregunta_id} className="grid md:grid-cols-2 gap-2 items-center">
                   <div className="text-sm">{it.pregunta}</div>
                   <div className="flex gap-3 justify-start md:justify-end">
                     {Array.from({ length: it.escala_max - it.escala_min + 1 }).map((_, i) => {
@@ -168,10 +246,10 @@ function FormByRole({
                         <label key={v} className="inline-flex items-center gap-1">
                           <input
                             type="radio"
-                            name={`item-${it.item_id}`}
+                            name={`item-${it.pregunta_id}`}
                             value={v}
-                            checked={vals[it.item_id] === v}
-                            onChange={(e) => setValor(it.item_id, e.target.value)}
+                            checked={vals[it.pregunta_id] === v}
+                            onChange={(e) => setValor(it.pregunta_id, e.target.value)}
                           />
                           <span className="text-xs">{v}</span>
                         </label>
@@ -220,19 +298,26 @@ export default function Page() {
   useEffect(() => {
     let alive = true;
     (async () => {
+      // Importante: no forzamos roles si no hay sesión. Deja que FormByRole muestre login.
       const { data: u } = await supabase.auth.getUser();
       const email = u?.user?.email?.toLowerCase() ?? '';
       if (!alive) return;
       setUserEmail(email);
 
-      // 🔒 Si NO es @uce.edu.ec ⇒ solo Estudiantes
-      if (email && !email.endsWith('@uce.edu.ec')) {
+      if (!email) {
+        // Sin sesión: muestra solo estudiantes (el formulario pedirá login)
         setRoles(['estudiante']);
         return;
       }
 
-      // Institucional: pide roles reales
-      const { data, error } = await supabase.rpc<Rol[]>('api_current_roles');
+      // Si no es institucional, restringe a estudiantes
+      if (!email.endsWith('@uce.edu.ec')) {
+        setRoles(['estudiante']);
+        return;
+      }
+
+      // Institucional: intenta leer roles reales (si falla, cae a estudiante)
+      const { data, error } = await supabase.rpc<Rol[], VoidArgs>('api_current_roles', {});
       if (!alive) return;
       if (error) {
         console.error(error);
@@ -250,40 +335,31 @@ export default function Page() {
   const onlyStudent = roles.length === 1 && roles[0] === 'estudiante';
   const showDebug = process.env.NEXT_PUBLIC_SHOW_ROLE_DEBUG === '1';
 
-  // 👇 Debug del proyecto de Supabase que usa el front
-  const supaUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-  const supaRef = supaUrl.match(/https:\/\/([a-z0-9-]+)\.supabase\.co/)?.[1] ?? '(desconocido)';
-
   return (
     <main className="space-y-10">
       {showDebug && (
-        <div className="p-3 rounded-lg border bg-yellow-50 text-sm space-y-1">
+        <div className="p-3 rounded-lg border bg-yellow-50 text-sm">
           <div><b>DEBUG</b></div>
           <div>Email: {userEmail || '(sin sesión)'}</div>
           <div>Roles: {roles.join(', ') || '(vacío)'}</div>
-          <div>Supabase ref: <code>{supaRef}</code></div>
         </div>
       )}
 
       {/* Estudiantes */}
       {roles.includes('estudiante') && (
-        <FormByRole
-          role="estudiante"
-          slug="estudiante" // (no se usa)
-          title="EVALUACIÓN DE ESTUDIANTES"
-        />
+        <FormByRole role="estudiante" _slug="estudiante" title="EVALUACIÓN DE ESTUDIANTES" />
       )}
 
       {/* Autoevaluación */}
       {!onlyStudent && roles.includes('auto_docente') && (
-        <FormByRole role="auto_docente" slug="auto" title="AUTOEVALUACIÓN" />
+        <FormByRole role="auto_docente" _slug="auto" title="AUTOEVALUACIÓN" />
       )}
 
       {/* Coord. Asignatura */}
       {!onlyStudent && roles.includes('coord_asignatura') && (
         <FormByRole
           role="coord_asignatura"
-          slug="coord-asig"
+          _slug="coord-asig"
           target="docente"
           title="EVALUACIÓN (Coordinador/a de Asignatura → docentes)"
         />
@@ -294,13 +370,13 @@ export default function Page() {
         <>
           <FormByRole
             role="coord_nivelacion"
-            slug="coord-nivel-docentes"
+            _slug="coord-nivel-docentes"
             target="docente"
             title="EVALUACIÓN (Coordinación de Nivelación → docentes)"
           />
           <FormByRole
             role="coord_nivelacion"
-            slug="coord-nivel-coord"
+            _slug="coord-nivel-coord"
             target="coord"
             title="EVALUACIÓN (Coordinación de Nivelación → coordinadores de asignatura)"
           />
