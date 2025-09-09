@@ -1,325 +1,296 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
+/** ===== Tipos ===== */
 type Rol = 'estudiante' | 'auto_docente' | 'coord_asignatura' | 'coord_nivelacion';
-type Docente = { docente_id: number; nombre: string };
-type Pregunta = { pregunta_id: number; categoria: string; texto: string };
+type Item = {
+  item_id: number;
+  categoria: string;
+  pregunta: string;
+  orden: number;
+  escala_min: number;
+  escala_max: number;
+};
 
-export default function Evaluacion() {
-  // sesión + roles
-  const [email, setEmail] = useState<string | null>(null);
-  const [roles, setRoles] = useState<Rol[] | null>(null);
+/** ===== Formulario genérico por rol ===== */
+function FormByRole({
+  role,
+  slug, // ← ya no se usa, pero lo dejamos para no romper llamadas existentes
+  target = null,
+  title,
+}: {
+  role: Rol;
+  slug: string;
+  target?: 'docente' | 'coord' | null;
+  title: string;
+}) {
+  const [items, setItems] = useState<Item[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [vals, setVals] = useState<Record<number, number>>({});
+  const [modalidad, setModalidad] = useState('');
+  const [cursoId, setCursoId] = useState('');
+  const [docenteId, setDocenteId] = useState('');
+  const [coordAsigId, setCoordAsigId] = useState('');
+  const [loMejor, setLoMejor] = useState('');
+  const [aMejorar, setAMejorar] = useState('');
+  const [msg, setMsg] = useState<string | null>(null);
 
-  // estado UI
-  const [modalidad, setModalidad] = useState<'Presencial' | 'Distancia' | ''>('');
-  const [curso, setCurso] = useState<string>('');
-  const [cursos, setCursos] = useState<string[]>([]);
-  const [docentes, setDocentes] = useState<Docente[]>([]);
-  const [preguntas, setPreguntas] = useState<Pregunta[]>([]);
-  const [respuestas, setRespuestas] = useState<Record<number, any>>({});
-  const [msg, setMsg] = useState<string>('');
-
-  // ===== 1) Sesión + roles (clamp: si NO es @uce.edu.ec => solo estudiante) =====
+  // ✅ Carga preguntas SOLO por rol (sin slug)
   useEffect(() => {
+    let on = true;
     (async () => {
-      const { data } = await supabase.auth.getUser();
-      const e = data.user?.email?.toLowerCase() ?? null;
-      setEmail(e);
-
-      if (!e) { setRoles([]); return; }
-      if (!e.endsWith('@uce.edu.ec')) { setRoles(['estudiante']); return; }
-
-      const { data: r, error } = await supabase.rpc<Rol[]>('api_current_roles');
-      if (error) { console.error(error); setRoles(['estudiante']); }
-      else { setRoles((r ?? []) as Rol[]); }
-    })();
-  }, []);
-
-  // ===== 2) Banco de preguntas (solo estudiantes: tabla public.preguntas) =====
-  useEffect(() => {
-    if (!roles || !roles.includes('estudiante')) return;
-    supabase
-      .from('preguntas')
-      .select('pregunta_id,categoria,texto')
-      .order('pregunta_id', { ascending: true })
-      .then(({ data, error }) => {
-        if (error) console.error(error);
-        setPreguntas(((data ?? []) as any[]).map(r => ({
-          pregunta_id: Number(r.pregunta_id),
-          categoria: r.categoria ?? 'Sección única',
-          texto: r.texto ?? '',
-        })));
-      });
-  }, [roles]);
-
-  // ===== 3) Modalidad => cursos =====
-  useEffect(() => {
-    if (!modalidad) return;
-    setCurso('');
-    setDocentes([]);
-    supabase
-      .from('catalogo_cursos')
-      .select('curso_id')
-      .eq('modalidad', modalidad)
-      .order('curso_id', { ascending: true })
-      .then(({ data, error }) => {
-        if (error) console.error(error);
-        setCursos(((data ?? []) as any[]).map(r => String(r.curso_id)));
-      });
-  }, [modalidad]);
-
-  // ===== 4) Curso => docentes + preparar respuestas (SIN FK: 2 llamadas) =====
-  useEffect(() => {
-    if (!curso) return;
-
-    (async () => {
-      // 1) IDs desde ofertas_docentes
-      const { data: filas, error: e1 } = await supabase
-        .from('ofertas_docentes')
-        .select('docente_id')
-        .eq('curso_id', curso);
-
-      if (e1) { console.error(e1); setDocentes([]); return; }
-
-      const ids = Array.from(new Set((filas ?? []).map((r: any) => Number(r.docente_id))));
-      if (ids.length === 0) { setDocentes([]); return; }
-
-      // 2) Nombres desde docentes
-      const { data: dsData, error: e2 } = await supabase
-        .from('docentes')
-        .select('id,nombre')
-        .in('id', ids);
-
-      if (e2) console.error(e2);
-
-      const nameById: Record<number, string> = Object.fromEntries(
-        (dsData ?? []).map((d: any) => [Number(d.id), String(d.nombre ?? '')])
-      );
-
-      const ds: Docente[] = ids.map((id) => ({
-        docente_id: id,
-        nombre: nameById[id] || `Docente ${id}`,
-      }));
-
-      setDocentes(ds);
-
-      // preparar estructura de respuestas
-      setRespuestas(prev => {
-        const next = { ...prev };
-        ds.forEach(d => {
-          if (!next[d.docente_id]) {
-            next[d.docente_id] = {
-              no_aplica: false,
-              respuestas: {},
-              lo_mejor: '',
-              a_mejorar: '',
-            };
-          }
-        });
-        return next;
-      });
-    })();
-  }, [curso]);
-
-  // ===== Handlers =====
-  function setNA(docente_id: number, val: boolean) {
-    setRespuestas(prev => ({ ...prev, [docente_id]: { ...prev[docente_id], no_aplica: val } }));
-  }
-  function setQ(docente_id: number, q: number, v: number) {
-    setRespuestas(prev => ({
-      ...prev,
-      [docente_id]: {
-        ...prev[docente_id],
-        respuestas: { ...(prev[docente_id]?.respuestas ?? {}), ['q' + q]: v },
-      },
-    }));
-  }
-  function setText(docente_id: number, field: 'lo_mejor' | 'a_mejorar', v: string) {
-    setRespuestas(prev => ({ ...prev, [docente_id]: { ...prev[docente_id], [field]: v } }));
-  }
-
-  // ===== Validación =====
-  function validoTodo(): { ok: boolean; msg?: string } {
-    if (!roles?.includes('estudiante')) return { ok: false, msg: 'No tienes acceso a esta encuesta.' };
-    if (!modalidad) return { ok: false, msg: 'Selecciona modalidad' };
-    if (!curso) return { ok: false, msg: 'Selecciona curso' };
-    if (!docentes.length) return { ok: false, msg: 'No hay docentes para este curso' };
-    if (!preguntas.length) return { ok: false, msg: 'No hay preguntas cargadas' };
-
-    for (const d of docentes) {
-      const pack = respuestas[d.docente_id];
-      if (!pack) return { ok: false, msg: `Faltan respuestas para ${d.nombre}` };
-      if (!pack.no_aplica) {
-        for (const p of preguntas) {
-          const v = pack.respuestas?.['q' + p.pregunta_id];
-          if (![1, 2, 3, 4].includes(v)) return { ok: false, msg: `Falta Q${p.pregunta_id} para ${d.nombre}` };
-        }
+      setLoading(true);
+      const { data, error } = await supabase.rpc('api_items_por_rol', { p_rol: role });
+      if (!on) return;
+      if (error) {
+        console.error(error);
+        setItems([]);
+      } else {
+        setItems((data ?? []) as Item[]);
       }
+      setLoading(false);
+    })();
+    return () => { on = false; };
+  }, [role]);
+
+  const porCategoria = useMemo(() => {
+    const g: Record<string, Item[]> = {};
+    (items ?? []).forEach((it) => { (g[it.categoria] ||= []).push(it); });
+    return g;
+  }, [items]);
+
+  const setValor = (id: number, v: number | string) =>
+    setVals((p) => ({ ...p, [id]: Number(v) }));
+
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMsg(null);
+    const payload: any = {
+      rol: role,
+      modalidad: modalidad || null,
+      curso_id: cursoId || null,
+      docente_id: target === 'docente' ? (docenteId ? Number(docenteId) : null) : null,
+      coord_asignatura_id: target === 'coord' ? (coordAsigId ? Number(coordAsigId) : null) : null,
+      no_aplica: false,
+      respuestas: vals,
+      lo_mejor: loMejor || null,
+      a_mejorar: aMejorar || null,
+    };
+    const { error } = await supabase.from('eval_nivelacion').insert([payload]);
+    if (error) {
+      console.error(error);
+      setMsg('❌ Error al guardar: ' + (error.message || 'ver consola'));
+    } else {
+      setMsg('✅ ¡Guardado con éxito!');
+      setVals({});
+      setLoMejor('');
+      setAMejorar('');
+      setDocenteId('');
+      setCoordAsigId('');
     }
-    return { ok: true };
-  }
+  };
 
-  // ===== Envío =====
-  async function enviar() {
-    setMsg('');
-    const check = validoTodo();
-    if (!check.ok) { setMsg(check.msg!); return; }
-
-    const payload = docentes.map(d => ({
-      docente_id: d.docente_id,
-      no_aplica: !!respuestas[d.docente_id].no_aplica,
-      respuestas: respuestas[d.docente_id].no_aplica ? null : respuestas[d.docente_id].respuestas,
-      lo_mejor: respuestas[d.docente_id].lo_mejor || null,
-      a_mejorar: respuestas[d.docente_id].a_mejorar || null,
-    }));
-
-    // RPC servidor (si existe)
-    const { error } = await supabase.rpc('submit_eval_curso', {
-      p_curso_id: curso,
-      p_modalidad: modalidad,
-      p_payload: payload,
-    });
-
-    // // Alternativa directa si no tienes ese RPC:
-    // const { error } = await supabase.from('eval_nivelacion').insert(
-    //   payload.map(row => ({
-    //     rol: 'estudiante',
-    //     modalidad,
-    //     curso_id: curso,
-    //     docente_id: row.docente_id,
-    //     no_aplica: row.no_aplica,
-    //     respuestas: row.respuestas,
-    //     lo_mejor: row.lo_mejor,
-    //     a_mejorar: row.a_mejorar,
-    //   }))
-    // );
-
-    if (error) setMsg(error.message);
-    else { alert('¡Evaluación enviada!'); location.href = '/'; }
-  }
-
-  // ===== Renders =====
-  if (!email) return <main className="container py-10">Debes iniciar sesión con tu correo UCE.</main>;
-  if (!roles) return <main className="container py-10">Cargando…</main>;
-  if (!roles.includes('estudiante')) {
-    return (
-      <main className="container py-10">
-        <h2 className="mb-2">Acceso restringido</h2>
-        <p>Esta vista es solo para <b>Estudiantes</b>.</p>
-      </main>
-    );
-  }
-
-  const escala = [
-    { label: 'S (Siempre)', value: 4 },
-    { label: 'CS (Casi siempre)', value: 3 },
-    { label: 'EAO (En algunas ocasiones)', value: 2 },
-    { label: 'N (Nunca)', value: 1 },
-  ];
+  if (loading) return <div className="p-4">Cargando preguntas…</div>;
+  if (!items || items.length === 0)
+    return <div className="p-4">No hay preguntas para este instrumento.</div>;
 
   return (
-    <main className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="kicker">Encuesta</div>
-          <h1>Evalúa a tus docentes</h1>
-        </div>
-        <div className="badge">Sesión: {email}</div>
-      </div>
+    <section className="card space-y-6">
+      <h2 className="text-xl font-semibold">{title}</h2>
 
-      <div className="grid md:grid-cols-3 gap-4">
-        <div className="card">
-          <label className="label">Modalidad</label>
-          <div className="flex gap-4">
-            {(['Presencial', 'Distancia'] as const).map((m) => (
-              <label key={m} className="inline-flex items-center gap-2">
-                <input type="radio" name="modalidad" checked={modalidad === m} onChange={() => setModalidad(m)} />
-                {m}
-              </label>
-            ))}
+      <form onSubmit={onSubmit} className="space-y-6">
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div>
+            <label className="label">Modalidad</label>
+            <input
+              className="input"
+              value={modalidad}
+              onChange={(e) => setModalidad(e.target.value)}
+              placeholder="Presencial / Distancia"
+            />
           </div>
+          <div>
+            <label className="label">Curso ID</label>
+            <input
+              className="input"
+              value={cursoId}
+              onChange={(e) => setCursoId(e.target.value)}
+              placeholder="FAC-ADM-..."
+            />
+          </div>
+
+          {target === 'docente' && (
+            <div className="sm:col-span-2">
+              <label className="label">Docente ID</label>
+              <input
+                className="input"
+                value={docenteId}
+                onChange={(e) => setDocenteId(e.target.value)}
+                placeholder="ID numérico del docente"
+              />
+            </div>
+          )}
+
+          {target === 'coord' && (
+            <div className="sm:col-span-2">
+              <label className="label">Coordinador/a de asignatura ID</label>
+              <input
+                className="input"
+                value={coordAsigId}
+                onChange={(e) => setCoordAsigId(e.target.value)}
+                placeholder="ID numérico de coordinador/a"
+              />
+            </div>
+          )}
         </div>
 
-        <div className="card md:col-span-2">
-          <label className="label">Curso</label>
-          <select className="input" value={curso} onChange={(e) => setCurso(e.target.value)}>
-            <option value="">— Selecciona —</option>
-            {cursos.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <small className="muted">Solo aparecen cursos de la modalidad elegida.</small>
-        </div>
-      </div>
-
-      {curso && docentes.length > 0 && (
-        <section className="space-y-6">
-          {docentes.map((d) => {
-            const pack = respuestas[d.docente_id] ?? {};
-            return (
-              <div key={d.docente_id} className="card">
-                <div className="flex items-center justify-between">
-                  <h2>{d.nombre}</h2>
-                  <label className="inline-flex items-center gap-2">
-                    <input type="checkbox" checked={!!pack.no_aplica} onChange={(e) => setNA(d.docente_id, e.target.checked)} />
-                    No aplica
-                  </label>
-                </div>
-
-                {!pack.no_aplica && (
-                  <div className="mt-4 space-y-4">
-                    {preguntas.map((p) => (
-                      <div key={p.pregunta_id} className="border-t pt-3">
-                        <div className="text-sm text-gray-600">{p.categoria}</div>
-                        <div className="font-medium">{p.texto}</div>
-                        <div className="flex flex-wrap gap-4 mt-2">
-                          {escala.map((opt) => (
-                            <label key={opt.value} className="inline-flex items-center gap-2">
-                              <input
-                                type="radio"
-                                name={`d${d.docente_id}-q${p.pregunta_id}`}
-                                checked={(pack.respuestas?.['q' + p.pregunta_id] ?? null) === opt.value}
-                                onChange={() => setQ(d.docente_id, p.pregunta_id, opt.value)}
-                              />
-                              {opt.label}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="label">Lo mejor de este docente</label>
-                        <textarea
-                          className="input"
-                          rows={3}
-                          value={pack.lo_mejor ?? ''}
-                          onChange={(e) => setText(d.docente_id, 'lo_mejor', e.target.value)}
-                        />
-                      </div>
-                      <div>
-                        <label className="label">Aspectos a mejorar</label>
-                        <textarea
-                          className="input"
-                          rows={3}
-                          value={pack.a_mejorar ?? ''}
-                          onChange={(e) => setText(d.docente_id, 'a_mejorar', e.target.value)}
-                        />
-                      </div>
-                    </div>
+        {Object.entries(porCategoria).map(([cat, arr]) => (
+          <div key={cat} className="rounded-2xl border bg-white p-4 shadow-sm">
+            <h3 className="font-semibold mb-3">{cat}</h3>
+            <div className="space-y-3">
+              {arr.map((it) => (
+                <div key={it.item_id} className="grid md:grid-cols-2 gap-2 items-center">
+                  <div className="text-sm">{it.pregunta}</div>
+                  <div className="flex gap-3 justify-start md:justify-end">
+                    {Array.from({ length: it.escala_max - it.escala_min + 1 }).map((_, i) => {
+                      const v = it.escala_min + i;
+                      return (
+                        <label key={v} className="inline-flex items-center gap-1">
+                          <input
+                            type="radio"
+                            name={`item-${it.item_id}`}
+                            value={v}
+                            checked={vals[it.item_id] === v}
+                            onChange={(e) => setValor(it.item_id, e.target.value)}
+                          />
+                          <span className="text-xs">{v}</span>
+                        </label>
+                      );
+                    })}
                   </div>
-                )}
-              </div>
-            );
-          })}
-          <div className="flex items-center gap-3">
-            <button onClick={enviar} className="btn btn-primary">Enviar evaluación</button>
-            {msg && <small className="muted">{msg}</small>}
+                </div>
+              ))}
+            </div>
           </div>
-        </section>
+        ))}
+
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div>
+            <label className="label">Lo mejor</label>
+            <textarea
+              className="input"
+              rows={3}
+              value={loMejor}
+              onChange={(e) => setLoMejor(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">Aspectos a mejorar</label>
+            <textarea
+              className="input"
+              rows={3}
+              value={aMejorar}
+              onChange={(e) => setAMejorar(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <button className="btn btn-primary">Guardar</button>
+        {msg && <div className="text-sm mt-2">{msg}</div>}
+      </form>
+    </section>
+  );
+}
+
+/** ===== Página (clamp por email) ===== */
+export default function Page() {
+  const [userEmail, setUserEmail] = useState<string>('');
+  const [roles, setRoles] = useState<Rol[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data: u } = await supabase.auth.getUser();
+      const email = u?.user?.email?.toLowerCase() ?? '';
+      if (!alive) return;
+      setUserEmail(email);
+
+      // 🔒 Si NO es @uce.edu.ec ⇒ solo Estudiantes
+      if (email && !email.endsWith('@uce.edu.ec')) {
+        setRoles(['estudiante']);
+        return;
+      }
+
+      // Institucional: pide roles reales
+      const { data, error } = await supabase.rpc<Rol[]>('api_current_roles');
+      if (!alive) return;
+      if (error) {
+        console.error(error);
+        setRoles(['estudiante']);
+      } else {
+        setRoles((data ?? []) as Rol[]);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (!roles) return <main className="p-6">Cargando…</main>;
+  const onlyStudent = roles.length === 1 && roles[0] === 'estudiante';
+  const showDebug = process.env.NEXT_PUBLIC_SHOW_ROLE_DEBUG === '1';
+
+  return (
+    <main className="space-y-10">
+      {showDebug && (
+        <div className="p-3 rounded-lg border bg-yellow-50 text-sm">
+          <div><b>DEBUG</b></div>
+          <div>Email: {userEmail || '(sin sesión)'}</div>
+          <div>Roles: {roles.join(', ') || '(vacío)'}</div>
+        </div>
       )}
 
-      {curso && docentes.length === 0 && (
-        <div className="muted">No hay docentes para este curso.</div>
+      {/* Estudiantes */}
+      {roles.includes('estudiante') && (
+        <FormByRole
+          role="estudiante"
+          slug="estudiante" // (no se usa)
+          title="EVALUACIÓN DE ESTUDIANTES"
+        />
+      )}
+
+      {/* Autoevaluación */}
+      {!onlyStudent && roles.includes('auto_docente') && (
+        <FormByRole role="auto_docente" slug="auto" title="AUTOEVALUACIÓN" />
+      )}
+
+      {/* Coord. Asignatura */}
+      {!onlyStudent && roles.includes('coord_asignatura') && (
+        <FormByRole
+          role="coord_asignatura"
+          slug="coord-asig"
+          target="docente"
+          title="EVALUACIÓN (Coordinador/a de Asignatura → docentes)"
+        />
+      )}
+
+      {/* Coord. Nivelación */}
+      {!onlyStudent && roles.includes('coord_nivelacion') && (
+        <>
+          <FormByRole
+            role="coord_nivelacion"
+            slug="coord-nivel-docentes"
+            target="docente"
+            title="EVALUACIÓN (Coordinación de Nivelación → docentes)"
+          />
+          <FormByRole
+            role="coord_nivelacion"
+            slug="coord-nivel-coord"
+            target="coord"
+            title="EVALUACIÓN (Coordinación de Nivelación → coordinadores de asignatura)"
+          />
+        </>
       )}
     </main>
   );
