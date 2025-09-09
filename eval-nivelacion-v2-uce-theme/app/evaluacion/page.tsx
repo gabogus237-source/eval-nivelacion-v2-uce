@@ -1,17 +1,27 @@
 'use client';
-
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
 /** ===== Tipos ===== */
 type Rol = 'estudiante' | 'auto_docente' | 'coord_asignatura' | 'coord_nivelacion';
 type Item = {
-  pregunta_id: number; // la RPC devuelve pregunta_id
+  pregunta_id: number;
   categoria: string;
   pregunta: string;
   orden: number;
   escala_min: number;
   escala_max: number;
+};
+
+type Curso = {
+  curso_id: string;
+  modalidad: string | null;
+  nombre: string | null;
+};
+
+type Docente = {
+  id: number;
+  display: string;
 };
 
 /** ===== Login inline (Magic Link) ===== */
@@ -70,44 +80,55 @@ function InlineMagicLink() {
 /** ===== Formulario genérico por rol ===== */
 function FormByRole({
   role,
-  _slug, // (no usado) se mantiene por compatibilidad
+  slug, // compatibilidad con tu código original
   target = null,
   title,
 }: {
   role: Rol;
-  _slug: string;
+  slug: string;
   target?: 'docente' | 'coord' | null;
   title: string;
 }) {
   const [items, setItems] = useState<Item[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [showLogin, setShowLogin] = useState(false);
-  const [vals, setVals] = useState<Record<number, number>>({});
-  const [modalidad, setModalidad] = useState('');
+
+  // Catálogo de cursos
+  const [cursos, setCursos] = useState<Curso[]>([]);
   const [cursoId, setCursoId] = useState('');
-  const [docenteId, setDocenteId] = useState('');
+  const [modalidad, setModalidad] = useState(''); // solo Presencial | Distancia
+
+  // Docentes por curso
+  const [docentes, setDocentes] = useState<Docente[]>([]);
+  const [docenteId, setDocenteId] = useState<string>(''); // string para el select
+
+  // Campo para coord asignatura (cuando target="coord")
   const [coordAsigId, setCoordAsigId] = useState('');
+
+  // Respuestas y comentarios
+  const [vals, setVals] = useState<Record<number, number>>({});
   const [loMejor, setLoMejor] = useState('');
   const [aMejorar, setAMejorar] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
 
-  // ✅ Carga preguntas SOLO por rol, y SOLO si hay sesión
+  // Carga preguntas + catálogo de cursos (solo con sesión)
   useEffect(() => {
     let on = true;
     (async () => {
       setLoading(true);
 
-      // 1) verificar sesión
+      // 1) sesión
       const { data: s } = await supabase.auth.getSession();
       if (!on) return;
       if (!s?.session) {
         setShowLogin(true);
         setItems(null);
+        setCursos([]);
         setLoading(false);
         return;
       }
 
-      // 2) traer preguntas por rol/periodo (sin genéricos en rpc)
+      // 2) preguntas por rol/periodo
       const periodo = '2025-2025';
       const { data, error } = await supabase.rpc('get_preguntas_para', {
         rol_in: role,
@@ -119,40 +140,131 @@ function FormByRole({
         console.error('RPC get_preguntas_para error:', error);
         setItems([]);
       } else {
-        setItems(((data as Item[]) ?? []) as Item[]);
+        setItems(((data ?? []) as Item[]));
       }
+
+      // 3) catálogo de cursos
+      const { data: cat, error: errCat } = await supabase
+        .from('catalogo_cursos')
+        .select('curso_id, modalidad, nombre')
+        .order('curso_id', { ascending: true });
+
+      if (!on) return;
+      if (errCat) {
+        console.error('catalogo_cursos error:', errCat);
+        setCursos([]);
+      } else {
+        setCursos((cat ?? []) as Curso[]);
+      }
+
       setLoading(false);
     })();
-    return () => {
-      on = false;
-    };
+    return () => { on = false; };
   }, [role]);
+
+  // Al elegir curso: autocompletar modalidad (solo 'Presencial' | 'Distancia') y cargar docentes
+  useEffect(() => {
+    if (!cursoId) {
+      setModalidad('');
+      setDocentes([]);
+      setDocenteId('');
+      return;
+    }
+    const c = cursos.find((x) => x.curso_id === cursoId);
+    if (c) {
+      const m = (c.modalidad || '').toLowerCase();
+      setModalidad(m.includes('presencial') ? 'Presencial' : 'Distancia');
+    }
+
+    // Cargar docentes del curso
+    (async () => {
+      // 1) Intento preferido: tabla de mapeo coordinadores_docentes con relación a docentes
+      const { data, error } = await supabase
+        .from('coordinadores_docentes')
+        .select(`
+          docente_id,
+          docentes:docente_id ( id, nombre, nombres, apellidos )
+        `)
+        .eq('curso_id', cursoId);
+
+      if (!error && Array.isArray(data)) {
+        const list: Docente[] = (data as any[]).map((row) => {
+          const d = row.docentes || {};
+          const id = Number(row.docente_id ?? d.id);
+          const display =
+            d.nombre ||
+            [d.nombres, d.apellidos].filter(Boolean).join(' ') ||
+            `Docente #${id}`;
+        return { id, display };
+        }).filter((d) => Number.isFinite(d.id));
+        // Si no trajo nada, cae al fallback más abajo
+        if (list.length > 0) {
+          setDocentes(list);
+          setDocenteId(''); // forzar selección
+          return;
+        }
+      }
+
+      // 2) Fallback: listar todos los docentes
+      const { data: all, error: errAll } = await supabase
+        .from('docentes')
+        .select('id, nombre, nombres, apellidos')
+        .order('id', { ascending: true });
+
+      if (!errAll && Array.isArray(all)) {
+        const list: Docente[] = (all as any[]).map((d: any) => ({
+          id: Number(d.id),
+          display:
+            d.nombre ||
+            [d.nombres, d.apellidos].filter(Boolean).join(' ') ||
+            `Docente #${d.id}`,
+        }));
+        setDocentes(list);
+        setDocenteId('');
+      } else {
+        console.error('No fue posible cargar docentes:', errAll);
+        setDocentes([]);
+        setDocenteId('');
+      }
+    })();
+  }, [cursoId, cursos]);
 
   const porCategoria = useMemo(() => {
     const g: Record<string, Item[]> = {};
-    (items ?? []).forEach((it) => {
-      (g[it.categoria] ||= []).push(it);
-    });
+    (items ?? []).forEach((it) => { (g[it.categoria] ||= []).push(it); });
+    Object.values(g).forEach(arr => arr.sort((a, b) => a.orden - b.orden));
     return g;
   }, [items]);
 
   const setValor = (id: number, v: number | string) =>
     setVals((p) => ({ ...p, [id]: Number(v) }));
 
+  // Reglas: cuándo exigir docente
+  const requiereDocente =
+    role === 'estudiante' || target === 'docente';
+
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMsg(null);
+
+    // Validaciones mínimas
+    if (!cursoId) { setMsg('⚠ Selecciona el curso.'); return; }
+    if (!modalidad) { setMsg('⚠ Selecciona la modalidad.'); return; }
+    if (requiereDocente && !docenteId) { setMsg('⚠ Selecciona el docente.'); return; }
+    if (target === 'coord' && !coordAsigId.trim()) { setMsg('⚠ Ingresa el ID del coordinador/a.'); return; }
+
     const payload: any = {
       rol: role,
-      modalidad: modalidad || null,
-      curso_id: cursoId || null,
-      docente_id: target === 'docente' ? (docenteId ? Number(docenteId) : null) : null,
+      modalidad,
+      curso_id: cursoId,
+      docente_id: requiereDocente ? Number(docenteId) : null,
       coord_asignatura_id: target === 'coord' ? (coordAsigId ? Number(coordAsigId) : null) : null,
       no_aplica: false,
       respuestas: vals,
       lo_mejor: loMejor || null,
       a_mejorar: aMejorar || null,
     };
+
     const { error } = await supabase.from('eval_nivelacion').insert([payload]);
     if (error) {
       console.error(error);
@@ -164,12 +276,13 @@ function FormByRole({
       setAMejorar('');
       setDocenteId('');
       setCoordAsigId('');
+      // Mantengo curso y modalidad
     }
   };
 
   // ===== Render =====
   if (loading) return <div className="p-4">Cargando preguntas…</div>;
-  if (showLogin) return <InlineMagicLink />; // si no hay sesión, mostramos login
+  if (showLogin) return <InlineMagicLink />;
   if (!items || items.length === 0)
     return <div className="p-4">No hay preguntas para este instrumento.</div>;
 
@@ -179,37 +292,59 @@ function FormByRole({
 
       <form onSubmit={onSubmit} className="space-y-6">
         <div className="grid sm:grid-cols-2 gap-3">
+          {/* Curso desde catálogo */}
           <div>
-            <label className="label">Modalidad</label>
-            <input
-              className="input"
-              value={modalidad}
-              onChange={(e) => setModalidad(e.target.value)}
-              placeholder="Presencial / Distancia"
-            />
-          </div>
-          <div>
-            <label className="label">Curso ID</label>
-            <input
+            <label className="label">Curso</label>
+            <select
               className="input"
               value={cursoId}
               onChange={(e) => setCursoId(e.target.value)}
-              placeholder="FAC-ADM-..."
-            />
+              required
+            >
+              <option value="">Seleccione…</option>
+              {cursos.map((c) => (
+                <option key={c.curso_id} value={c.curso_id}>
+                  {c.curso_id}{c.nombre ? ` — ${c.nombre}` : ''}
+                </option>
+              ))}
+            </select>
           </div>
 
-          {target === 'docente' && (
+          {/* Modalidad solo Presencial | Distancia */}
+          <div>
+            <label className="label">Modalidad</label>
+            <select
+              className="input"
+              value={modalidad}
+              onChange={(e) => setModalidad(e.target.value)}
+              required
+            >
+              <option value="">Seleccione…</option>
+              <option value="Presencial">Presencial</option>
+              <option value="Distancia">Distancia</option>
+            </select>
+          </div>
+
+          {/* Docente (según curso) */}
+          {requiereDocente && (
             <div className="sm:col-span-2">
-              <label className="label">Docente ID</label>
-              <input
+              <label className="label">Docente</label>
+              <select
                 className="input"
                 value={docenteId}
                 onChange={(e) => setDocenteId(e.target.value)}
-                placeholder="ID numérico del docente"
-              />
+                required
+                disabled={!cursoId}
+              >
+                <option value="">{cursoId ? 'Seleccione…' : 'Elija un curso primero'}</option>
+                {docentes.map((d) => (
+                  <option key={d.id} value={d.id}>{d.display}</option>
+                ))}
+              </select>
             </div>
           )}
 
+          {/* Coordinador/a de asignatura ID (solo cuando target="coord") */}
           {target === 'coord' && (
             <div className="sm:col-span-2">
               <label className="label">Coordinador/a de asignatura ID</label>
@@ -218,6 +353,7 @@ function FormByRole({
                 value={coordAsigId}
                 onChange={(e) => setCoordAsigId(e.target.value)}
                 placeholder="ID numérico de coordinador/a"
+                required
               />
             </div>
           )}
@@ -241,6 +377,7 @@ function FormByRole({
                             value={v}
                             checked={vals[it.pregunta_id] === v}
                             onChange={(e) => setValor(it.pregunta_id, e.target.value)}
+                            required
                           />
                           <span className="text-xs">{v}</span>
                         </label>
@@ -289,91 +426,29 @@ export default function Page() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      // Importante: no forzamos roles si no hay sesión. Deja que FormByRole muestre login.
       const { data: u } = await supabase.auth.getUser();
       const email = u?.user?.email?.toLowerCase() ?? '';
       if (!alive) return;
       setUserEmail(email);
 
       if (!email) {
-        // Sin sesión: muestra solo estudiantes (el formulario pedirá login)
         setRoles(['estudiante']);
         return;
       }
 
-      // Si no es institucional, restringe a estudiantes
       if (!email.endsWith('@uce.edu.ec')) {
         setRoles(['estudiante']);
         return;
       }
 
-      // Institucional: intenta leer roles reales (sin genéricos en rpc)
       const { data, error } = await supabase.rpc('api_current_roles');
       if (!alive) return;
       if (error) {
         console.error(error);
         setRoles(['estudiante']);
       } else {
-        setRoles(((data as Rol[]) ?? []) as Rol[]);
+        setRoles(((data ?? []) as Rol[]));
       }
     })();
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  if (!roles) return <main className="p-6">Cargando…</main>;
-  const onlyStudent = roles.length === 1 && roles[0] === 'estudiante';
-  const showDebug = process.env.NEXT_PUBLIC_SHOW_ROLE_DEBUG === '1';
-
-  return (
-    <main className="space-y-10">
-      {showDebug && (
-        <div className="p-3 rounded-lg border bg-yellow-50 text-sm">
-          <div><b>DEBUG</b></div>
-          <div>Email: {userEmail || '(sin sesión)'}</div>
-          <div>Roles: {roles.join(', ') || '(vacío)'}</div>
-        </div>
-      )}
-
-      {/* Estudiantes */}
-      {roles.includes('estudiante') && (
-        <FormByRole role="estudiante" _slug="estudiante" title="EVALUACIÓN DE ESTUDIANTES" />
-      )}
-
-      {/* Autoevaluación */}
-      {!onlyStudent && roles.includes('auto_docente') && (
-        <FormByRole role="auto_docente" _slug="auto" title="AUTOEVALUACIÓN" />
-      )}
-
-      {/* Coord. Asignatura */}
-      {!onlyStudent && roles.includes('coord_asignatura') && (
-        <FormByRole
-          role="coord_asignatura"
-          _slug="coord-asig"
-          target="docente"
-          title="EVALUACIÓN (Coordinador/a de Asignatura → docentes)"
-        />
-      )}
-
-      {/* Coord. Nivelación */}
-      {!onlyStudent && roles.includes('coord_nivelacion') && (
-        <>
-          <FormByRole
-            role="coord_nivelacion"
-            _slug="coord-nivel-docentes"
-            target="docente"
-            title="EVALUACIÓN (Coordinación de Nivelación → docentes)"
-          />
-          <FormByRole
-            role="coord_nivelacion"
-            _slug="coord-nivel-coord"
-            target="coord"
-            title="EVALUACIÓN (Coordinación de Nivelación → coordinadores de asignatura)"
-          />
-        </>
-      )}
-    </main>
-  );
-}
+    return () => { alive = false;
 
