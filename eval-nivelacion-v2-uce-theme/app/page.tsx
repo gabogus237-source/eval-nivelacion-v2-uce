@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
-/** ==== Tipos ====/ */
+/** ================== Tipos ================== */
 type Rol = 'estudiante' | 'auto_docente' | 'coord_asignatura' | 'coord_nivelacion';
 type Item = {
   item_id: number;
@@ -13,40 +13,7 @@ type Item = {
   escala_max: number;
 };
 
-/** ==== Gate de Rol (oculta/mostrar secciones) ====/ */
-function RoleGate({
-  role,
-  hideIfOnlyStudent = false,
-  children,
-}: {
-  role: Rol;
-  hideIfOnlyStudent?: boolean;
-  children: React.ReactNode;
-}) {
-  const [roles, setRoles] = useState<Rol[] | null>(null);
-
-  useEffect(() => {
-    let on = true;
-    supabase.rpc('api_current_roles').then(({ data, error }) => {
-      if (!on) return;
-      if (error) console.error(error);
-      setRoles((data ?? []) as Rol[]);
-    });
-    return () => {
-      on = false;
-    };
-  }, []);
-
-  if (!roles) return <div className="p-6">Cargando…</div>;
-
-  const onlyStudent = roles.length === 1 && roles[0] === 'estudiante';
-  if (!roles.includes(role)) return null;
-  if (hideIfOnlyStudent && onlyStudent) return null;
-
-  return <>{children}</>;
-}
-
-/** ==== Formulario para un instrumento por rol (auto-contenido) ====/ */
+/** ================== Formulario genérico por rol ================== */
 function FormByRole({
   role,
   slug,
@@ -86,9 +53,7 @@ function FormByRole({
       }
       setLoading(false);
     })();
-    return () => {
-      on = false;
-    };
+    return () => { on = false; };
   }, [role, slug]);
 
   const porCategoria = useMemo(() => {
@@ -106,9 +71,8 @@ function FormByRole({
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMsg(null);
-
     const payload: any = {
-      rol: role, // ✅ se guarda con el rol correcto
+      rol: role, // 🔒 guarda con el rol correcto
       modalidad: modalidad || null,
       curso_id: cursoId || null,
       docente_id: target === 'docente' ? (docenteId ? Number(docenteId) : null) : null,
@@ -118,24 +82,13 @@ function FormByRole({
       lo_mejor: loMejor || null,
       a_mejorar: aMejorar || null,
     };
-
     const { error } = await supabase.from('eval_nivelacion').insert([payload]);
-    if (error) {
-      console.error(error);
-      setMsg('❌ Error al guardar: ' + (error.message || 'ver consola'));
-    } else {
-      setMsg('✅ ¡Guardado con éxito!');
-      setVals({});
-      setLoMejor('');
-      setAMejorar('');
-      setDocenteId('');
-      setCoordAsigId('');
-    }
+    if (error) { console.error(error); setMsg('❌ Error al guardar: ' + (error.message || 'ver consola')); }
+    else { setMsg('✅ ¡Guardado con éxito!'); setVals({}); setLoMejor(''); setAMejorar(''); setDocenteId(''); setCoordAsigId(''); }
   };
 
   if (loading) return <div className="p-4">Cargando preguntas…</div>;
-  if (!items || items.length === 0)
-    return <div className="p-4">No hay preguntas para este instrumento.</div>;
+  if (!items || items.length === 0) return <div className="p-4">No hay preguntas para este instrumento.</div>;
 
   return (
     <section className="card space-y-6">
@@ -145,44 +98,22 @@ function FormByRole({
         <div className="grid sm:grid-cols-2 gap-3">
           <div>
             <label className="label">Modalidad</label>
-            <input
-              className="input"
-              value={modalidad}
-              onChange={(e) => setModalidad(e.target.value)}
-              placeholder="Presencial / Distancia"
-            />
+            <input className="input" value={modalidad} onChange={(e) => setModalidad(e.target.value)} placeholder="Presencial / Distancia" />
           </div>
           <div>
             <label className="label">Curso ID</label>
-            <input
-              className="input"
-              value={cursoId}
-              onChange={(e) => setCursoId(e.target.value)}
-              placeholder="FAC-ADM-..."
-            />
+            <input className="input" value={cursoId} onChange={(e) => setCursoId(e.target.value)} placeholder="FAC-ADM-..." />
           </div>
-
           {target === 'docente' && (
             <div className="sm:col-span-2">
               <label className="label">Docente ID</label>
-              <input
-                className="input"
-                value={docenteId}
-                onChange={(e) => setDocenteId(e.target.value)}
-                placeholder="ID numérico del docente"
-              />
+              <input className="input" value={docenteId} onChange={(e) => setDocenteId(e.target.value)} placeholder="ID numérico del docente" />
             </div>
           )}
-
           {target === 'coord' && (
             <div className="sm:col-span-2">
               <label className="label">Coordinador/a de asignatura ID</label>
-              <input
-                className="input"
-                value={coordAsigId}
-                onChange={(e) => setCoordAsigId(e.target.value)}
-                placeholder="ID numérico de coordinador/a de asignatura"
-              />
+              <input className="input" value={coordAsigId} onChange={(e) => setCoordAsigId(e.target.value)} placeholder="ID numérico de coordinador/a" />
             </div>
           )}
         </div>
@@ -220,21 +151,11 @@ function FormByRole({
         <div className="grid sm:grid-cols-2 gap-3">
           <div>
             <label className="label">Lo mejor</label>
-            <textarea
-              className="input"
-              rows={3}
-              value={loMejor}
-              onChange={(e) => setLoMejor(e.target.value)}
-            />
+            <textarea className="input" rows={3} value={loMejor} onChange={(e) => setLoMejor(e.target.value)} />
           </div>
           <div>
             <label className="label">Aspectos a mejorar</label>
-            <textarea
-              className="input"
-              rows={3}
-              value={aMejorar}
-              onChange={(e) => setAMejorar(e.target.value)}
-            />
+            <textarea className="input" rows={3} value={aMejorar} onChange={(e) => setAMejorar(e.target.value)} />
           </div>
         </div>
 
@@ -245,49 +166,93 @@ function FormByRole({
   );
 }
 
-/** ==== Página ====/ */
+/** ================== Página ================== */
 export default function Page() {
+  const [roles, setRoles] = useState<Rol[] | null>(null);
+  const [userEmail, setUserEmail] = useState<string>('');
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      // 1) Usuario actual
+      const { data: u } = await supabase.auth.getUser();
+      const email = u?.user?.email?.toLowerCase() ?? '';
+      if (!alive) return;
+      setUserEmail(email);
+
+      // 2) Forzar “solo estudiante” por env o dominio externo
+      const FORCE_STUDENT = (process.env.NEXT_PUBLIC_FORCE_STUDENT_ONLY ?? '')
+        .split(',')
+        .map(s => s.trim().toLowerCase())
+        .filter(Boolean);
+
+      if (FORCE_STUDENT.includes(email) || (email && !email.endsWith('@uce.edu.ec'))) {
+        setRoles(['estudiante']); // 🔒 clamp: externos ven solo Estudiante
+        return;
+      }
+
+      // 3) Roles reales desde RPC
+      const { data, error } = await supabase.rpc<Rol[]>('api_current_roles');
+      if (!alive) return;
+      if (error) { console.error(error); setRoles(['estudiante']); } // fallback seguro
+      else setRoles((data ?? []) as Rol[]);
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  if (!roles) return <main className="p-6">Cargando…</main>;
+  const onlyStudent = roles.length === 1 && roles[0] === 'estudiante';
+
+  // (Opcional) Debug en desarrollo
+  const showDebug = process.env.NEXT_PUBLIC_SHOW_ROLE_DEBUG === '1';
+
   return (
     <main className="space-y-10">
+      {showDebug && (
+        <div className="p-3 rounded-lg border bg-yellow-50 text-sm">
+          <div><b>DEBUG</b></div>
+          <div>Email: {userEmail || '(sin sesión)'}</div>
+          <div>Roles: {roles.join(', ') || '(vacío)'}</div>
+        </div>
+      )}
+
       {/* ==== Estudiantes ==== */}
-      <RoleGate role="estudiante">
-        <FormByRole
-          role="estudiante"
-          slug="/eval/estudiante"
-          title="EVALUACIÓN DE ESTUDIANTES"
-        />
-      </RoleGate>
+      {roles.includes('estudiante') && (
+        <FormByRole role="estudiante" slug="/eval/estudiante" title="EVALUACIÓN DE ESTUDIANTES" />
+      )}
 
-      {/* ==== Autoevaluación (oculta si solo-estudiante) ==== */}
-      <RoleGate role="auto_docente" hideIfOnlyStudent>
+      {/* ==== Autoevaluación ==== */}
+      {!onlyStudent && roles.includes('auto_docente') && (
         <FormByRole role="auto_docente" slug="/eval/auto" title="AUTOEVALUACIÓN" />
-      </RoleGate>
+      )}
 
-      {/* ==== Coordinador/a de Asignatura (evalúa DOCENTES) ==== */}
-      <RoleGate role="coord_asignatura" hideIfOnlyStudent>
+      {/* ==== Coordinador/a de Asignatura ==== */}
+      {!onlyStudent && roles.includes('coord_asignatura') && (
         <FormByRole
           role="coord_asignatura"
           slug="/eval/coord-asig"
           target="docente"
           title="EVALUACIÓN (Coordinador/a de Asignatura → docentes)"
         />
-      </RoleGate>
+      )}
 
       {/* ==== Coordinación de Nivelación ==== */}
-      <RoleGate role="coord_nivelacion" hideIfOnlyStudent>
-        <FormByRole
-          role="coord_nivelacion"
-          slug="/eval/coord-nivel-docentes"
-          target="docente"
-          title="EVALUACIÓN (Coordinación de Nivelación → docentes)"
-        />
-        <FormByRole
-          role="coord_nivelacion"
-          slug="/eval/coord-nivel-coord"
-          target="coord"
-          title="EVALUACIÓN (Coordinación de Nivelación → coordinadores de asignatura)"
-        />
-      </RoleGate>
+      {!onlyStudent && roles.includes('coord_nivelacion') && (
+        <>
+          <FormByRole
+            role="coord_nivelacion"
+            slug="/eval/coord-nivel-docentes"
+            target="docente"
+            title="EVALUACIÓN (Coordinación de Nivelación → docentes)"
+          />
+          <FormByRole
+            role="coord_nivelacion"
+            slug="/eval/coord-nivel-coord"
+            target="coord"
+            title="EVALUACIÓN (Coordinación de Nivelación → coordinadores de asignatura)"
+          />
+        </>
+      )}
     </main>
   );
 }
