@@ -1,92 +1,293 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
-export default function Page() {
-  const [email, setEmail] = useState('');
-  const [sent, setSent] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+/** ==== Tipos ====/ */
+type Rol = 'estudiante' | 'auto_docente' | 'coord_asignatura' | 'coord_nivelacion';
+type Item = {
+  item_id: number;
+  categoria: string;
+  pregunta: string;
+  orden: number;
+  escala_min: number;
+  escala_max: number;
+};
 
-  // ✅ Allowlist de pruebas (lee de env, con fallback)
-  const TEST_ALLOW: string[] = (process.env.NEXT_PUBLIC_TEST_ALLOW ?? 'gus237@hotmail.com')
-    .split(',')
-    .map(s => s.trim().toLowerCase())
-    .filter(Boolean);
+/** ==== Gate de Rol (oculta/mostrar secciones) ====/ */
+function RoleGate({
+  role,
+  hideIfOnlyStudent = false,
+  children,
+}: {
+  role: Rol;
+  hideIfOnlyStudent?: boolean;
+  children: React.ReactNode;
+}) {
+  const [roles, setRoles] = useState<Rol[] | null>(null);
 
-  async function signIn(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-
-    const eNorm = email.trim().toLowerCase();
-    const isUCE = eNorm.endsWith('@uce.edu.ec');
-    const isTest = TEST_ALLOW.includes(eNorm);
-
-    // ✅ Permitir institucional o los correos de prueba
-    if (!isUCE && !isTest) {
-      setError('Usa tu correo institucional @uce.edu.ec');
-      return;
-    }
-
-    const { error } = await supabase.auth.signInWithOtp({
-      email: eNorm,
-      options: { emailRedirectTo: `${location.origin}/evaluacion` }
+  useEffect(() => {
+    let on = true;
+    supabase.rpc('api_current_roles').then(({ data, error }) => {
+      if (!on) return;
+      if (error) console.error(error);
+      setRoles((data ?? []) as Rol[]);
     });
+    return () => {
+      on = false;
+    };
+  }, []);
 
-    if (error) setError(error.message);
-    else setSent(true);
-  }
+  if (!roles) return <div className="p-6">Cargando…</div>;
+
+  const onlyStudent = roles.length === 1 && roles[0] === 'estudiante';
+  if (!roles.includes(role)) return null;
+  if (hideIfOnlyStudent && onlyStudent) return null;
+
+  return <>{children}</>;
+}
+
+/** ==== Formulario para un instrumento por rol (auto-contenido) ====/ */
+function FormByRole({
+  role,
+  slug,
+  target = null, // 'docente' | 'coord' | null
+  title,
+}: {
+  role: Rol;
+  slug: string;
+  target?: 'docente' | 'coord' | null;
+  title: string;
+}) {
+  const [items, setItems] = useState<Item[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [vals, setVals] = useState<Record<number, number>>({});
+  const [modalidad, setModalidad] = useState('');
+  const [cursoId, setCursoId] = useState('');
+  const [docenteId, setDocenteId] = useState('');
+  const [coordAsigId, setCoordAsigId] = useState('');
+  const [loMejor, setLoMejor] = useState('');
+  const [aMejorar, setAMejorar] = useState('');
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      setLoading(true);
+      const { data, error } = await supabase.rpc('api_items_autorizado', {
+        p_rol: role,
+        p_slug: slug,
+      });
+      if (!on) return;
+      if (error) {
+        console.error(error);
+        setItems([]);
+      } else {
+        setItems((data ?? []) as Item[]);
+      }
+      setLoading(false);
+    })();
+    return () => {
+      on = false;
+    };
+  }, [role, slug]);
+
+  const porCategoria = useMemo(() => {
+    const g: Record<string, Item[]> = {};
+    (items ?? []).forEach((it) => {
+      g[it.categoria] = g[it.categoria] || [];
+      g[it.categoria].push(it);
+    });
+    return g;
+  }, [items]);
+
+  const setValor = (itemId: number, v: number | string) =>
+    setVals((prev) => ({ ...prev, [itemId]: Number(v) }));
+
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMsg(null);
+
+    const payload: any = {
+      rol: role, // ✅ se guarda con el rol correcto
+      modalidad: modalidad || null,
+      curso_id: cursoId || null,
+      docente_id: target === 'docente' ? (docenteId ? Number(docenteId) : null) : null,
+      coord_asignatura_id: target === 'coord' ? (coordAsigId ? Number(coordAsigId) : null) : null,
+      no_aplica: false,
+      respuestas: vals,
+      lo_mejor: loMejor || null,
+      a_mejorar: aMejorar || null,
+    };
+
+    const { error } = await supabase.from('eval_nivelacion').insert([payload]);
+    if (error) {
+      console.error(error);
+      setMsg('❌ Error al guardar: ' + (error.message || 'ver consola'));
+    } else {
+      setMsg('✅ ¡Guardado con éxito!');
+      setVals({});
+      setLoMejor('');
+      setAMejorar('');
+      setDocenteId('');
+      setCoordAsigId('');
+    }
+  };
+
+  if (loading) return <div className="p-4">Cargando preguntas…</div>;
+  if (!items || items.length === 0)
+    return <div className="p-4">No hay preguntas para este instrumento.</div>;
 
   return (
-    <main className="grid md:grid-cols-2 gap-8 items-center">
-      <div className="space-y-4">
-        <div className="kicker">Encuesta de satisfacción académica</div>
-        <h1>Evalúa a tus docentes del curso de nivelación</h1>
-        <p className="text-gray-700">
-          Tu opinión es anónima y ayuda a mejorar la calidad académica.
-          Inicia sesión con tu correo institucional <b>@uce.edu.ec</b> para ingresar.
-          {TEST_ALLOW.length > 0 && (
-            <> Para <b>pruebas</b> también se permite: {TEST_ALLOW.join(', ')}.</>
-          )}
-        </p>
+    <section className="card space-y-6">
+      <h2 className="text-xl font-semibold">{title}</h2>
 
-        <div className="card max-w-md">
-          {sent ? (
-            <div className="space-y-2">
-              <h2>Revisa tu correo</h2>
-              <p className="text-gray-600">Te enviamos un enlace de acceso. Si no llega, revisa tu carpeta de spam o intenta nuevamente.</p>
-            </div>
-          ) : (
-            <form onSubmit={signIn} className="space-y-3">
-              <label className="label">Correo institucional</label>
+      <form onSubmit={onSubmit} className="space-y-6">
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div>
+            <label className="label">Modalidad</label>
+            <input
+              className="input"
+              value={modalidad}
+              onChange={(e) => setModalidad(e.target.value)}
+              placeholder="Presencial / Distancia"
+            />
+          </div>
+          <div>
+            <label className="label">Curso ID</label>
+            <input
+              className="input"
+              value={cursoId}
+              onChange={(e) => setCursoId(e.target.value)}
+              placeholder="FAC-ADM-..."
+            />
+          </div>
+
+          {target === 'docente' && (
+            <div className="sm:col-span-2">
+              <label className="label">Docente ID</label>
               <input
                 className="input"
-                placeholder="tu_usuario@uce.edu.ec"
-                value={email}
-                onChange={e=>setEmail(e.target.value)}
-                type="email"
-                required
+                value={docenteId}
+                onChange={(e) => setDocenteId(e.target.value)}
+                placeholder="ID numérico del docente"
               />
-              {error && <small className="muted">{error}</small>}
-              <button className="btn btn-primary w-full">Enviar enlace</button>
-            </form>
+            </div>
+          )}
+
+          {target === 'coord' && (
+            <div className="sm:col-span-2">
+              <label className="label">Coordinador/a de asignatura ID</label>
+              <input
+                className="input"
+                value={coordAsigId}
+                onChange={(e) => setCoordAsigId(e.target.value)}
+                placeholder="ID numérico de coordinador/a de asignatura"
+              />
+            </div>
           )}
         </div>
 
-        <div className="text-sm text-gray-500">
-          El sistema usa enlaces mágicos (Magic Link) enviados desde <b>evaluacionesnivelacion@gmail.com</b>.
-        </div>
-      </div>
+        {Object.entries(porCategoria).map(([cat, arr]) => (
+          <div key={cat} className="rounded-2xl border bg-white p-4 shadow-sm">
+            <h3 className="font-semibold mb-3">{cat}</h3>
+            <div className="space-y-3">
+              {arr.map((it) => (
+                <div key={it.item_id} className="grid md:grid-cols-2 gap-2 items-center">
+                  <div className="text-sm">{it.pregunta}</div>
+                  <div className="flex gap-3 justify-start md:justify-end">
+                    {Array.from({ length: it.escala_max - it.escala_min + 1 }).map((_, i) => {
+                      const v = it.escala_min + i;
+                      return (
+                        <label key={v} className="inline-flex items-center gap-1">
+                          <input
+                            type="radio"
+                            name={`item-${it.item_id}`}
+                            value={v}
+                            checked={vals[it.item_id] === v}
+                            onChange={(e) => setValor(it.item_id, e.target.value)}
+                          />
+                          <span className="text-xs">{v}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
 
-      <div className="card">
-        <h2 className="mb-3">¿Cómo funciona?</h2>
-        <ol className="list-decimal pl-5 space-y-2 text-gray-700">
-          <li>Inicia sesión con tu correo UCE (o un correo de prueba autorizado).</li>
-          <li>Elige modalidad → curso → docentes.</li>
-          <li>Responde 15 preguntas por docente o marca “No aplica”.</li>
-          <li>Opcional: agrega comentarios (Lo mejor / Aspectos a mejorar).</li>
-          <li>Envía. El resultado solo lo ve el administrador.</li>
-        </ol>
-      </div>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div>
+            <label className="label">Lo mejor</label>
+            <textarea
+              className="input"
+              rows={3}
+              value={loMejor}
+              onChange={(e) => setLoMejor(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">Aspectos a mejorar</label>
+            <textarea
+              className="input"
+              rows={3}
+              value={aMejorar}
+              onChange={(e) => setAMejorar(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <button className="btn btn-primary">Guardar</button>
+        {msg && <div className="text-sm mt-2">{msg}</div>}
+      </form>
+    </section>
+  );
+}
+
+/** ==== Página ====/ */
+export default function Page() {
+  return (
+    <main className="space-y-10">
+      {/* ==== Estudiantes ==== */}
+      <RoleGate role="estudiante">
+        <FormByRole
+          role="estudiante"
+          slug="/eval/estudiante"
+          title="EVALUACIÓN DE ESTUDIANTES"
+        />
+      </RoleGate>
+
+      {/* ==== Autoevaluación (oculta si solo-estudiante) ==== */}
+      <RoleGate role="auto_docente" hideIfOnlyStudent>
+        <FormByRole role="auto_docente" slug="/eval/auto" title="AUTOEVALUACIÓN" />
+      </RoleGate>
+
+      {/* ==== Coordinador/a de Asignatura (evalúa DOCENTES) ==== */}
+      <RoleGate role="coord_asignatura" hideIfOnlyStudent>
+        <FormByRole
+          role="coord_asignatura"
+          slug="/eval/coord-asig"
+          target="docente"
+          title="EVALUACIÓN (Coordinador/a de Asignatura → docentes)"
+        />
+      </RoleGate>
+
+      {/* ==== Coordinación de Nivelación ==== */}
+      <RoleGate role="coord_nivelacion" hideIfOnlyStudent>
+        <FormByRole
+          role="coord_nivelacion"
+          slug="/eval/coord-nivel-docentes"
+          target="docente"
+          title="EVALUACIÓN (Coordinación de Nivelación → docentes)"
+        />
+        <FormByRole
+          role="coord_nivelacion"
+          slug="/eval/coord-nivel-coord"
+          target="coord"
+          title="EVALUACIÓN (Coordinación de Nivelación → coordinadores de asignatura)"
+        />
+      </RoleGate>
     </main>
   );
 }
