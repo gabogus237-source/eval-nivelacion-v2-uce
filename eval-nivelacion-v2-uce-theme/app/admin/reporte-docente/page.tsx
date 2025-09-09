@@ -1,17 +1,22 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
 
 /** ===== Tipos ===== */
 type Rol = 'estudiante' | 'auto_docente' | 'coord_asignatura' | 'coord_nivelacion';
 type Item = {
-  pregunta_id: number;     // <-- la RPC devuelve pregunta_id
+  pregunta_id: number;     // la RPC devuelve pregunta_id
   categoria: string;
   pregunta: string;
   orden: number;
   escala_min: number;
   escala_max: number;
+};
+
+type Curso = {
+  curso_id: string;
+  modalidad: string | null;
+  nombre: string | null;
 };
 
 /** ===== Login inline (Magic Link) ===== */
@@ -70,7 +75,7 @@ function InlineMagicLink() {
 /** ===== Formulario genérico por rol ===== */
 function FormByRole({
   role,
-  slug, // ← compatibilidad con tu código
+  slug, // compatibilidad con tu código original
   target = null,
   title,
 }: {
@@ -82,16 +87,29 @@ function FormByRole({
   const [items, setItems] = useState<Item[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [showLogin, setShowLogin] = useState(false);
+
+  // Catálogo de cursos
+  const [cursos, setCursos] = useState<Curso[]>([]);
+  const [cursosError, setCursosError] = useState<string | null>(null);
+
+  // Respuestas
   const [vals, setVals] = useState<Record<number, number>>({});
+
+  // Cabecera (curso / modalidad)
   const [modalidad, setModalidad] = useState('');
   const [cursoId, setCursoId] = useState('');
+
+  // Identificaciones según target
   const [docenteId, setDocenteId] = useState('');
   const [coordAsigId, setCoordAsigId] = useState('');
+
+  // Comentarios
   const [loMejor, setLoMejor] = useState('');
   const [aMejorar, setAMejorar] = useState('');
+
   const [msg, setMsg] = useState<string | null>(null);
 
-  // ✅ Carga preguntas SOLO por rol, y SOLO si hay sesión
+  // ✅ Carga preguntas SOLO por rol, y SOLO si hay sesión; además carga catálogo de cursos
   useEffect(() => {
     let on = true;
     (async () => {
@@ -103,11 +121,12 @@ function FormByRole({
       if (!s?.session) {
         setShowLogin(true);
         setItems(null);
+        setCursos([]);
         setLoading(false);
         return;
       }
 
-      // 2) traer preguntas por rol/periodo desde la RPC correcta
+      // 2) preguntas por rol/periodo
       const periodo = '2025-2025';
       const { data, error } = await supabase.rpc('get_preguntas_para', {
         rol_in: role,
@@ -121,14 +140,40 @@ function FormByRole({
       } else {
         setItems(((data ?? []) as Item[]));
       }
+
+      // 3) catálogo de cursos
+      const { data: cat, error: errCat } = await supabase
+        .from('catalogo_cursos')
+        .select('curso_id, modalidad, nombre')
+        .order('curso_id', { ascending: true });
+
+      if (!on) return;
+      if (errCat) {
+        console.error('catalogo_cursos error:', errCat);
+        setCursosError('No se pudo cargar el catálogo de cursos (usaremos entrada manual).');
+        setCursos([]);
+      } else {
+        setCursos((cat ?? []) as Curso[]);
+        setCursosError(null);
+      }
+
       setLoading(false);
     })();
     return () => { on = false; };
   }, [role]);
 
+  // Al cambiar curso, autocompletar modalidad
+  useEffect(() => {
+    if (!cursoId) return;
+    const c = cursos.find((x) => x.curso_id === cursoId);
+    if (c) setModalidad(c.modalidad ?? '');
+  }, [cursoId, cursos]);
+
   const porCategoria = useMemo(() => {
     const g: Record<string, Item[]> = {};
     (items ?? []).forEach((it) => { (g[it.categoria] ||= []).push(it); });
+    // Ordenar por orden si deseas
+    Object.values(g).forEach(arr => arr.sort((a, b) => a.orden - b.orden));
     return g;
   }, [items]);
 
@@ -138,6 +183,7 @@ function FormByRole({
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMsg(null);
+
     const payload: any = {
       rol: role,
       modalidad: modalidad || null,
@@ -149,6 +195,7 @@ function FormByRole({
       lo_mejor: loMejor || null,
       a_mejorar: aMejorar || null,
     };
+
     const { error } = await supabase.from('eval_nivelacion').insert([payload]);
     if (error) {
       console.error(error);
@@ -160,12 +207,13 @@ function FormByRole({
       setAMejorar('');
       setDocenteId('');
       setCoordAsigId('');
+      // Mantengo curso y modalidad para no obligar a re-seleccionar
     }
   };
 
   // ===== Render =====
   if (loading) return <div className="p-4">Cargando preguntas…</div>;
-  if (showLogin) return <InlineMagicLink />; // <-- si no hay sesión, mostramos login
+  if (showLogin) return <InlineMagicLink />; // si no hay sesión, mostramos login
   if (!items || items.length === 0)
     return <div className="p-4">No hay preguntas para este instrumento.</div>;
 
@@ -175,24 +223,57 @@ function FormByRole({
 
       <form onSubmit={onSubmit} className="space-y-6">
         <div className="grid sm:grid-cols-2 gap-3">
-          <div>
-            <label className="label">Modalidad</label>
-            <input
-              className="input"
-              value={modalidad}
-              onChange={(e) => setModalidad(e.target.value)}
-              placeholder="Presencial / Distancia"
-            />
-          </div>
-          <div>
-            <label className="label">Curso ID</label>
-            <input
-              className="input"
-              value={cursoId}
-              onChange={(e) => setCursoId(e.target.value)}
-              placeholder="FAC-ADM-..."
-            />
-          </div>
+          {/* Curso y modalidad: preferimos catálogo; si no, fallback a inputs */}
+          {cursos.length > 0 ? (
+            <>
+              <div>
+                <label className="label">Curso</label>
+                <select
+                  className="input"
+                  value={cursoId}
+                  onChange={(e) => setCursoId(e.target.value)}
+                >
+                  <option value="">Seleccione…</option>
+                  {cursos.map((c) => (
+                    <option key={c.curso_id} value={c.curso_id}>
+                      {c.curso_id}{c.nombre ? ` — ${c.nombre}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Modalidad</label>
+                <input
+                  className="input"
+                  value={modalidad}
+                  onChange={(e) => setModalidad(e.target.value)}
+                  placeholder="Presencial / Distancia"
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <label className="label">Modalidad</label>
+                <input
+                  className="input"
+                  value={modalidad}
+                  onChange={(e) => setModalidad(e.target.value)}
+                  placeholder="Presencial / Distancia"
+                />
+              </div>
+              <div>
+                <label className="label">Curso ID</label>
+                <input
+                  className="input"
+                  value={cursoId}
+                  onChange={(e) => setCursoId(e.target.value)}
+                  placeholder="FAC-ADM-..."
+                />
+              </div>
+              {cursosError && <div className="sm:col-span-2 text-xs text-amber-700">{cursosError}</div>}
+            </>
+          )}
 
           {target === 'docente' && (
             <div className="sm:col-span-2">
@@ -233,7 +314,7 @@ function FormByRole({
                         <label key={v} className="inline-flex items-center gap-1">
                           <input
                             type="radio"
-                            name={`item-${it.pregunta_id}`}   // <-- usa pregunta_id
+                            name={`item-${it.pregunta_id}`}
                             value={v}
                             checked={vals[it.pregunta_id] === v}
                             onChange={(e) => setValor(it.pregunta_id, e.target.value)}
@@ -285,7 +366,7 @@ export default function Page() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      // Importante: no forzamos roles si no hay sesión. Deja que FormByRole muestre login.
+      // No forzamos roles si no hay sesión. Deja que FormByRole muestre login.
       const { data: u } = await supabase.auth.getUser();
       const email = u?.user?.email?.toLowerCase() ?? '';
       if (!alive) return;
@@ -293,7 +374,7 @@ export default function Page() {
 
       if (!email) {
         // Sin sesión: deja roles nulo; la UI de cada FormByRole mostrará login.
-        setRoles(['estudiante']); // puedes dejar solo estudiantes visibles
+        setRoles(['estudiante']);
         return;
       }
 
@@ -303,7 +384,7 @@ export default function Page() {
         return;
       }
 
-      // Institucional: intenta leer roles reales (si falla, cae a estudiante)
+      // Institucional: pide roles reales
       const { data, error } = await supabase.rpc('api_current_roles');
       if (!alive) return;
       if (error) {
@@ -374,3 +455,4 @@ export default function Page() {
     </main>
   );
 }
+
