@@ -2,30 +2,68 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
+type Rol = 'estudiante' | 'auto_docente' | 'coord_asignatura' | 'coord_nivelacion';
 type Docente = { docente_id: number; nombre: string };
 type Pregunta = { pregunta_id: number; categoria: string; texto: string };
 
 export default function Evaluacion() {
-  const [userEmail, setUserEmail] = useState<string | null>(null);
+  // sesión + roles
+  const [email, setEmail] = useState<string | null>(null);
+  const [roles, setRoles] = useState<Rol[] | null>(null);
+
+  // estado UI
   const [modalidad, setModalidad] = useState<'Presencial' | 'Distancia' | ''>('');
   const [curso, setCurso] = useState<string>('');
   const [cursos, setCursos] = useState<string[]>([]);
   const [docentes, setDocentes] = useState<Docente[]>([]);
   const [preguntas, setPreguntas] = useState<Pregunta[]>([]);
-  const [respuestas, setRespuestas] = useState<Record<number, any>>({}); // por docente_id
+  const [respuestas, setRespuestas] = useState<Record<number, any>>({});
   const [msg, setMsg] = useState<string>('');
 
-  // Cargar sesión y banco de preguntas
+  // ===== 1) Sesión + roles (clamp: si NO es @uce.edu.ec => solo estudiante) =====
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setUserEmail(data.user?.email ?? null));
-    supabase
-      .from('preguntas')
-      .select('*')
-      .order('pregunta_id')
-      .then(({ data }) => setPreguntas((data ?? []) as Pregunta[]));
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      const e = data.user?.email?.toLowerCase() ?? null;
+      setEmail(e);
+
+      if (!e) {
+        setRoles([]);
+        return;
+      }
+      if (!e.endsWith('@uce.edu.ec')) {
+        // correos externos de prueba
+        setRoles(['estudiante']);
+        return;
+      }
+      const { data: r, error } = await supabase.rpc<Rol[]>('api_current_roles');
+      if (error) {
+        console.error(error);
+        setRoles(['estudiante']); // fallback seguro
+      } else {
+        setRoles((r ?? []) as Rol[]);
+      }
+    })();
   }, []);
 
-  // Al elegir modalidad, cargar cursos
+  // ===== 2) Banco de preguntas (solo estudiantes: tabla public.preguntas) =====
+  useEffect(() => {
+    if (!roles || !roles.includes('estudiante')) return;
+    supabase
+      .from('preguntas')
+      .select('pregunta_id,categoria,texto')
+      .order('pregunta_id', { ascending: true })
+      .then(({ data, error }) => {
+        if (error) console.error(error);
+        setPreguntas(((data ?? []) as any[]).map(r => ({
+          pregunta_id: Number(r.pregunta_id),
+          categoria: r.categoria ?? 'Sección única',
+          texto: r.texto ?? '',
+        })));
+      });
+  }, [roles]);
+
+  // ===== 3) Modalidad => cursos =====
   useEffect(() => {
     if (!modalidad) return;
     setCurso('');
@@ -34,108 +72,118 @@ export default function Evaluacion() {
       .from('catalogo_cursos')
       .select('curso_id')
       .eq('modalidad', modalidad)
-      .order('curso_id')
-      .then(({ data }) => setCursos((data ?? []).map((r: any) => r.curso_id)));
+      .order('curso_id', { ascending: true })
+      .then(({ data, error }) => {
+        if (error) console.error(error);
+        setCursos(((data ?? []) as any[]).map(r => String(r.curso_id)));
+      });
   }, [modalidad]);
 
-  // Al elegir curso, cargar docentes y preparar estructura de respuestas
+  // ===== 4) Curso => docentes + preparar respuestas =====
   useEffect(() => {
     if (!curso) return;
     supabase
+      // requiere FK ofertas_docentes.docente_id -> docentes.id
       .from('ofertas_docentes')
       .select('docente_id, docentes(nombre)')
       .eq('curso_id', curso)
-      .then(({ data }) => {
-        const ds: Docente[] = (data ?? []).map((r: any) => ({
-          docente_id: r.docente_id,
-          nombre: r.docentes?.nombre ?? 'Docente',
+      .then(({ data, error }) => {
+        if (error) console.error(error);
+        const ds: Docente[] = ((data ?? []) as any[]).map(r => ({
+          docente_id: Number(r.docente_id),
+          nombre: (r.docentes?.nombre as string) ?? 'Docente',
         }));
         setDocentes(ds);
-        const next = { ...respuestas };
-        ds.forEach((d) => {
-          if (!next[d.docente_id]) {
-            next[d.docente_id] = {
-              no_aplica: false,
-              respuestas: {},
-              lo_mejor: '',
-              a_mejorar: '',
-            };
-          }
+        setRespuestas(prev => {
+          const next = { ...prev };
+          ds.forEach(d => {
+            if (!next[d.docente_id]) {
+              next[d.docente_id] = {
+                no_aplica: false,
+                respuestas: {},
+                lo_mejor: '',
+                a_mejorar: '',
+              };
+            }
+          });
+          return next;
         });
-        setRespuestas(next);
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [curso]);
 
-  // Handlers de estado
+  // ===== Handlers =====
   function setNA(docente_id: number, val: boolean) {
-    setRespuestas((prev) => ({
-      ...prev,
-      [docente_id]: { ...prev[docente_id], no_aplica: val },
-    }));
+    setRespuestas(prev => ({ ...prev, [docente_id]: { ...prev[docente_id], no_aplica: val } }));
   }
-
   function setQ(docente_id: number, q: number, v: number) {
-    setRespuestas((prev) => ({
+    setRespuestas(prev => ({
       ...prev,
       [docente_id]: {
         ...prev[docente_id],
-        respuestas: {
-          ...(prev[docente_id]?.respuestas ?? {}),
-          ['q' + q]: v,
-        },
+        respuestas: { ...(prev[docente_id]?.respuestas ?? {}), ['q' + q]: v },
       },
     }));
   }
-
   function setText(docente_id: number, field: 'lo_mejor' | 'a_mejorar', v: string) {
-    setRespuestas((prev) => ({
-      ...prev,
-      [docente_id]: {
-        ...prev[docente_id],
-        [field]: v,
-      },
-    }));
+    setRespuestas(prev => ({ ...prev, [docente_id]: { ...prev[docente_id], [field]: v } }));
   }
 
-  // Validación
+  // ===== Validación =====
   function validoTodo(): { ok: boolean; msg?: string } {
+    if (!roles?.includes('estudiante')) return { ok: false, msg: 'No tienes acceso a esta encuesta.' };
     if (!modalidad) return { ok: false, msg: 'Selecciona modalidad' };
     if (!curso) return { ok: false, msg: 'Selecciona curso' };
     if (!docentes.length) return { ok: false, msg: 'No hay docentes para este curso' };
+    if (!preguntas.length) return { ok: false, msg: 'No hay preguntas cargadas' };
+
     for (const d of docentes) {
       const pack = respuestas[d.docente_id];
       if (!pack) return { ok: false, msg: `Faltan respuestas para ${d.nombre}` };
       if (!pack.no_aplica) {
-        for (let i = 1; i <= 15; i++) {
-          const v = pack.respuestas?.['q' + i];
-          if (![1, 2, 3, 4].includes(v)) return { ok: false, msg: `Falta q${i} para ${d.nombre}` };
+        for (const p of preguntas) {
+          const v = pack.respuestas?.['q' + p.pregunta_id];
+          if (![1, 2, 3, 4].includes(v)) return { ok: false, msg: `Falta Q${p.pregunta_id} para ${d.nombre}` };
         }
       }
     }
     return { ok: true };
   }
 
-  // Envío
+  // ===== Envío =====
   async function enviar() {
     setMsg('');
     const check = validoTodo();
-    if (!check.ok) {
-      setMsg(check.msg!);
-      return;
-    }
-    const payload = docentes.map((d) => ({
+    if (!check.ok) { setMsg(check.msg!); return; }
+
+    const payload = docentes.map(d => ({
       docente_id: d.docente_id,
       no_aplica: !!respuestas[d.docente_id].no_aplica,
       respuestas: respuestas[d.docente_id].no_aplica ? null : respuestas[d.docente_id].respuestas,
       lo_mejor: respuestas[d.docente_id].lo_mejor || null,
       a_mejorar: respuestas[d.docente_id].a_mejorar || null,
     }));
+
+    // Usa tu RPC si existe, si no, te dejo un INSERT de respaldo (comenta el que no uses)
     const { error } = await supabase.rpc('submit_eval_curso', {
       p_curso_id: curso,
       p_modalidad: modalidad,
       p_payload: payload,
     });
+
+    // // Alternativa: inserción directa (activa solo si NO tienes el RPC):
+    // const { error } = await supabase.from('eval_nivelacion').insert(
+    //   payload.map((row: any) => ({
+    //     rol: 'estudiante',
+    //     modalidad,
+    //     curso_id: curso,
+    //     docente_id: row.docente_id,
+    //     no_aplica: row.no_aplica,
+    //     respuestas: row.respuestas,
+    //     lo_mejor: row.lo_mejor,
+    //     a_mejorar: row.a_mejorar,
+    //   }))
+    // );
+
     if (error) setMsg(error.message);
     else {
       alert('¡Evaluación enviada!');
@@ -143,8 +191,17 @@ export default function Evaluacion() {
     }
   }
 
-  // Si no hay sesión
-  if (!userEmail) return <main className="container py-10">Debes iniciar sesión con tu correo UCE.</main>;
+  // ===== Renders =====
+  if (!email) return <main className="container py-10">Debes iniciar sesión con tu correo UCE.</main>;
+  if (!roles) return <main className="container py-10">Cargando…</main>;
+  if (!roles.includes('estudiante')) {
+    return (
+      <main className="container py-10">
+        <h2 className="mb-2">Acceso restringido</h2>
+        <p>Esta vista es solo para <b>Estudiantes</b>.</p>
+      </main>
+    );
+  }
 
   const escala = [
     { label: 'S (Siempre)', value: 4 },
@@ -158,9 +215,9 @@ export default function Evaluacion() {
       <div className="flex items-center justify-between">
         <div>
           <div className="kicker">Encuesta</div>
-          <h1>Completa tu evaluación</h1>
+          <h1>Evalúa a tus docentes</h1>
         </div>
-        <div className="badge">Sesión: {userEmail}</div>
+        <div className="badge">Sesión: {email}</div>
       </div>
 
       <div className="grid md:grid-cols-3 gap-4">
@@ -175,15 +232,12 @@ export default function Evaluacion() {
             ))}
           </div>
         </div>
+
         <div className="card md:col-span-2">
           <label className="label">Curso</label>
           <select className="input" value={curso} onChange={(e) => setCurso(e.target.value)}>
             <option value="">— Selecciona —</option>
-            {cursos.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
+            {cursos.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
           <small className="muted">Solo aparecen cursos de la modalidad elegida.</small>
         </div>
@@ -250,12 +304,14 @@ export default function Evaluacion() {
             );
           })}
           <div className="flex items-center gap-3">
-            <button onClick={enviar} className="btn btn-primary">
-              Enviar evaluación
-            </button>
+            <button onClick={enviar} className="btn btn-primary">Enviar evaluación</button>
             {msg && <small className="muted">{msg}</small>}
           </div>
         </section>
+      )}
+
+      {curso && docentes.length === 0 && (
+        <div className="muted">No hay docentes para este curso.</div>
       )}
     </main>
   );
