@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
-/** ===== Tipos locales (solo para TS) ===== */
+/* ===== Tipos ===== */
 type Rol = 'estudiante' | 'auto_docente' | 'coord_asignatura' | 'coord_nivelacion';
 
 type Item = {
@@ -17,13 +17,22 @@ type Item = {
 
 type Curso = {
   curso_id: string;
-  modalidad: string | null; // 'Presencial' | 'Distancia'
+  modalidad: string | null;
   nombre: string | null;
 };
 
 type Docente = { id: number; display: string };
 
-/** ===== Login inline (Magic Link) ===== */
+/* ===== Helpers ===== */
+function normMod(raw: string | null | undefined): '' | 'presencial' | 'distancia' {
+  const s = (raw ?? '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim();
+  if (s.includes('presen')) return 'presencial';
+  if (s.includes('dist')) return 'distancia';
+  // Cualquier otro valor (virtual, mixta, etc.) no participa
+  return '';
+}
+
+/* ===== Magic Link ===== */
 function InlineMagicLink() {
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
@@ -76,10 +85,10 @@ function InlineMagicLink() {
   );
 }
 
-/** ===== Formulario genérico por rol ===== */
+/* ===== Formulario por rol ===== */
 function FormByRole({
   role,
-  slug, // compatibilidad (no usado)
+  slug, // no usado (compat)
   target = null,
   title,
 }: {
@@ -92,12 +101,12 @@ function FormByRole({
   const [loading, setLoading] = useState(true);
   const [showLogin, setShowLogin] = useState(false);
 
-  // Catálogo de cursos
+  // Catálogo y selección
   const [cursos, setCursos] = useState<Curso[]>([]);
   const [modalidad, setModalidad] = useState(''); // Presencial | Distancia
   const [cursoId, setCursoId] = useState('');
 
-  // Docentes (según curso)
+  // Docentes
   const [docentes, setDocentes] = useState<Docente[]>([]);
   const [docenteId, setDocenteId] = useState<string>('');
 
@@ -110,13 +119,12 @@ function FormByRole({
   const [aMejorar, setAMejorar] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
 
-  // Carga preguntas + catálogo (SOLO si hay sesión)
+  // Carga preguntas + catálogo (solo con sesión)
   useEffect(() => {
     let on = true;
     (async () => {
       setLoading(true);
 
-      // 1) sesión
       const { data: s } = await supabase.auth.getSession();
       if (!on) return;
       if (!s?.session) {
@@ -127,51 +135,39 @@ function FormByRole({
         return;
       }
 
-      // 2) preguntas por rol/periodo
+      // Preguntas
       const periodo = '2025-2025';
       const { data, error } = await supabase.rpc('get_preguntas_para', {
         rol_in: role,
         periodo_in: periodo,
       });
       if (!on) return;
-      if (error) {
-        console.error('get_preguntas_para error:', error);
-        setItems([]);
-      } else {
-        setItems((data ?? []) as Item[]);
-      }
+      if (error) setItems([]);
+      else setItems((data ?? []) as Item[]);
 
-      // 3) catálogo de cursos
+      // Catálogo de cursos (todos; filtramos en cliente con normalización)
       const { data: cat, error: errCat } = await supabase
         .from('catalogo_cursos')
         .select('curso_id, modalidad, nombre')
         .order('curso_id', { ascending: true });
 
       if (!on) return;
-      if (errCat) {
-        console.error('catalogo_cursos error:', errCat);
-        setCursos([]);
-      } else {
-        setCursos((cat ?? []) as Curso[]);
-      }
+      if (errCat) setCursos([]);
+      else setCursos((cat ?? []) as Curso[]);
 
       setLoading(false);
     })();
-    return () => {
-      on = false;
-    };
+    return () => { on = false; };
   }, [role]);
 
-  // Cursos filtrados por modalidad
+  // Cursos filtrados por modalidad elegida (con normalización)
   const cursosFiltrados = useMemo(() => {
-    const m = modalidad.toLowerCase();
-    if (!m) return [];
-    return cursos.filter((c) =>
-      (c.modalidad ?? '').toLowerCase().includes(m)
-    );
+    const pick = normMod(modalidad);
+    if (!pick) return [];
+    return cursos.filter((c) => normMod(c.modalidad) === pick);
   }, [cursos, modalidad]);
 
-  // Cuando cambia modalidad, reiniciar selección de curso y docentes
+  // Al cambiar modalidad, reiniciar curso/docentes
   useEffect(() => {
     setCursoId('');
     setDocentes([]);
@@ -186,7 +182,7 @@ function FormByRole({
       return;
     }
     (async () => {
-      // 1) traer docente_id desde coordinadores_docentes
+      // 1) ids de la tabla de mapeo
       const { data: mapRows, error: mapErr } = await supabase
         .from('coordinadores_docentes')
         .select('docente_id')
@@ -223,7 +219,7 @@ function FormByRole({
         }
       }
 
-      // 2) fallback: todos los docentes (para no dejar vacío)
+      // 2) Fallback: todos los docentes
       const { data: all, error: errAll } = await supabase
         .from('docentes')
         .select('id, nombre, nombres, apellidos')
@@ -240,14 +236,13 @@ function FormByRole({
           }))
         );
       } else {
-        console.error('docentes fallback error:', errAll);
         setDocentes([]);
       }
       setDocenteId('');
     })();
   }, [cursoId]);
 
-  // Agrupar preguntas por categoría
+  // Agrupar preguntas
   const porCategoria = useMemo(() => {
     const g: Record<string, Item[]> = {};
     (items ?? []).forEach((it) => {
@@ -260,7 +255,6 @@ function FormByRole({
   const setValor = (id: number, v: number | string) =>
     setVals((p) => ({ ...p, [id]: Number(v) }));
 
-  // ¿Cuándo exigir docente?
   const requiereDocente = role === 'estudiante' || target === 'docente';
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -285,25 +279,20 @@ function FormByRole({
     };
 
     const { error } = await supabase.from('eval_nivelacion').insert([payload]);
-    if (error) {
-      console.error(error);
-      setMsg('❌ Error al guardar: ' + (error.message || 'ver consola'));
-    } else {
+    if (error) setMsg('❌ Error al guardar: ' + (error.message || 'ver consola'));
+    else {
       setMsg('✅ ¡Guardado con éxito!');
       setVals({});
       setLoMejor('');
       setAMejorar('');
       setDocenteId('');
       setCoordAsigId('');
-      // Mantenemos modalidad y curso seleccionados
     }
   };
 
-  // ===== Render =====
   if (loading) return <div className="p-4">Cargando preguntas…</div>;
   if (showLogin) return <InlineMagicLink />;
-  if (!items || items.length === 0)
-    return <div className="p-4">No hay preguntas para este instrumento.</div>;
+  if (!items || items.length === 0) return <div className="p-4">No hay preguntas para este instrumento.</div>;
 
   return (
     <section className="card space-y-6">
@@ -311,7 +300,7 @@ function FormByRole({
 
       <form onSubmit={onSubmit} className="space-y-6">
         <div className="grid sm:grid-cols-2 gap-3">
-          {/* 1) Modalidad */}
+          {/* 1) Modalidad — SOLO estas dos opciones */}
           <div>
             <label className="label">Modalidad</label>
             <select
@@ -326,7 +315,7 @@ function FormByRole({
             </select>
           </div>
 
-          {/* 2) Curso (filtrado por modalidad) */}
+          {/* 2) Curso (filtrado por modalidad con normalización) */}
           <div>
             <label className="label">Curso</label>
             <select
@@ -347,7 +336,7 @@ function FormByRole({
             </select>
           </div>
 
-          {/* 3) Docente (según curso) */}
+          {/* 3) Docente del curso */}
           {requiereDocente && (
             <div className="sm:col-span-2">
               <label className="label">Docente</label>
@@ -442,7 +431,7 @@ function FormByRole({
   );
 }
 
-/** ===== Página (roles por email) ===== */
+/* ===== Página ===== */
 export default function Page() {
   const [userEmail, setUserEmail] = useState<string>('');
   const [roles, setRoles] = useState<Rol[] | null>(null);
@@ -455,28 +444,15 @@ export default function Page() {
       if (!alive) return;
       setUserEmail(email);
 
-      if (!email) {
-        setRoles(['estudiante']);
-        return;
-      }
-
-      if (!email.endsWith('@uce.edu.ec')) {
-        setRoles(['estudiante']);
-        return;
-      }
+      if (!email) { setRoles(['estudiante']); return; }
+      if (!email.endsWith('@uce.edu.ec')) { setRoles(['estudiante']); return; }
 
       const { data, error } = await supabase.rpc('api_current_roles');
       if (!alive) return;
-      if (error) {
-        console.error(error);
-        setRoles(['estudiante']);
-      } else {
-        setRoles((data ?? []) as Rol[]);
-      }
+      if (error) setRoles(['estudiante']);
+      else setRoles((data ?? []) as Rol[]);
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
   if (!roles) return <main className="p-6">Cargando…</main>;
@@ -493,17 +469,12 @@ export default function Page() {
         </div>
       )}
 
-      {/* Estudiantes */}
       {roles.includes('estudiante') && (
         <FormByRole role="estudiante" slug="estudiante" title="EVALUACIÓN DE ESTUDIANTES" />
       )}
-
-      {/* Autoevaluación */}
       {!onlyStudent && roles.includes('auto_docente') && (
         <FormByRole role="auto_docente" slug="auto" title="AUTOEVALUACIÓN" />
       )}
-
-      {/* Coord. Asignatura */}
       {!onlyStudent && roles.includes('coord_asignatura') && (
         <FormByRole
           role="coord_asignatura"
@@ -512,8 +483,6 @@ export default function Page() {
           title="EVALUACIÓN (Coordinador/a de Asignatura → docentes)"
         />
       )}
-
-      {/* Coord. Nivelación */}
       {!onlyStudent && roles.includes('coord_nivelacion') && (
         <>
           <FormByRole
