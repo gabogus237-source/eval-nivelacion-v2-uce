@@ -16,7 +16,7 @@ type Item = {
 /** ===== Formulario genérico por rol ===== */
 function FormByRole({
   role,
-  slug, // ← ya no se usa, pero lo dejamos para no romper llamadas existentes
+  slug, // ← ya no se usa, lo dejamos para no romper llamadas existentes
   target = null,
   title,
 }: {
@@ -36,12 +36,21 @@ function FormByRole({
   const [aMejorar, setAMejorar] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
 
-  // ✅ Carga preguntas SOLO por rol (sin slug)
+  // ✅ Carga preguntas SOLO por rol (sin slug) + LOG de depuración
   useEffect(() => {
     let on = true;
     (async () => {
       setLoading(true);
       const { data, error } = await supabase.rpc('api_items_por_rol', { p_rol: role });
+
+      // 🔎 LOG: mira la consola del navegador (F12 → Console)
+      console.log('RPC api_items_por_rol →', {
+        role,
+        len: Array.isArray(data) ? data.length : null,
+        error,
+        sample: Array.isArray(data) ? data.slice(0, 3) : null
+      });
+
       if (!on) return;
       if (error) {
         console.error(error);
@@ -241,13 +250,18 @@ export default function Page() {
   const onlyStudent = roles.length === 1 && roles[0] === 'estudiante';
   const showDebug = process.env.NEXT_PUBLIC_SHOW_ROLE_DEBUG === '1';
 
+  // 👇 Debug del proyecto de Supabase que usa el front
+  const supaUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+  const supaRef = supaUrl.match(/https:\/\/([a-z0-9-]+)\.supabase\.co/)?.[1] ?? '(desconocido)';
+
   return (
     <main className="space-y-10">
       {showDebug && (
-        <div className="p-3 rounded-lg border bg-yellow-50 text-sm">
+        <div className="p-3 rounded-lg border bg-yellow-50 text-sm space-y-1">
           <div><b>DEBUG</b></div>
           <div>Email: {userEmail || '(sin sesión)'}</div>
           <div>Roles: {roles.join(', ') || '(vacío)'}</div>
+          <div>Supabase ref: <code>{supaRef}</code></div>
         </div>
       )}
 
