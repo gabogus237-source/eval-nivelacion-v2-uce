@@ -1,12 +1,12 @@
 'use client';
+
 import { useEffect, useMemo, useState } from 'react';
-import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
 
 /** ===== Tipos ===== */
 type Rol = 'estudiante' | 'auto_docente' | 'coord_asignatura' | 'coord_nivelacion';
 type Item = {
-  pregunta_id: number;     // <-- la RPC devuelve pregunta_id
+  pregunta_id: number; // la RPC devuelve pregunta_id
   categoria: string;
   pregunta: string;
   orden: number;
@@ -42,7 +42,9 @@ function InlineMagicLink() {
     return (
       <div className="max-w-md mx-auto p-6 bg-white rounded-2xl shadow">
         <h1 className="text-xl font-semibold mb-2">Revisa tu correo</h1>
-        <p>Te enviamos un enlace a tu <b>@uce.edu.ec</b>. Ábrelo para iniciar sesión.</p>
+        <p>
+          Te enviamos un enlace a tu <b>@uce.edu.ec</b>. Ábrelo para iniciar sesión.
+        </p>
       </div>
     );
   }
@@ -50,7 +52,9 @@ function InlineMagicLink() {
   return (
     <div className="max-w-md mx-auto p-6 bg-white rounded-2xl shadow">
       <h1 className="text-xl font-semibold mb-4">Inicia sesión</h1>
-      <p className="text-sm mb-4">Usa tu correo institucional <b>@uce.edu.ec</b>.</p>
+      <p className="text-sm mb-4">
+        Usa tu correo institucional <b>@uce.edu.ec</b>.
+      </p>
       <form onSubmit={submit} className="space-y-3">
         <input
           type="email"
@@ -72,12 +76,12 @@ function InlineMagicLink() {
 /** ===== Formulario genérico por rol ===== */
 function FormByRole({
   role,
-  slug, // ← ya no se usa, pero se mantiene por compatibilidad
+  _slug, // ← (no usado) se deja por compatibilidad para no romper llamadas externas
   target = null,
   title,
 }: {
   role: Rol;
-  slug: string;
+  _slug: string;
   target?: 'docente' | 'coord' | null;
   title: string;
 }) {
@@ -301,8 +305,8 @@ export default function Page() {
       setUserEmail(email);
 
       if (!email) {
-        // Sin sesión: deja roles nulo; la UI de cada FormByRole mostrará login.
-        setRoles(['estudiante']); // puedes dejar solo estudiantes visibles
+        // Sin sesión: muestra solo estudiantes
+        setRoles(['estudiante']);
         return;
       }
 
@@ -335,7 +339,9 @@ export default function Page() {
     <main className="space-y-10">
       {showDebug && (
         <div className="p-3 rounded-lg border bg-yellow-50 text-sm">
-          <div><b>DEBUG</b></div>
+          <div>
+            <b>DEBUG</b>
+          </div>
           <div>Email: {userEmail || '(sin sesión)'}</div>
           <div>Roles: {roles.join(', ') || '(vacío)'}</div>
         </div>
@@ -343,23 +349,19 @@ export default function Page() {
 
       {/* Estudiantes */}
       {roles.includes('estudiante') && (
-        <FormByRole
-          role="estudiante"
-          slug="estudiante"
-          title="EVALUACIÓN DE ESTUDIANTES"
-        />
+        <FormByRole role="estudiante" _slug="estudiante" title="EVALUACIÓN DE ESTUDIANTES" />
       )}
 
       {/* Autoevaluación */}
       {!onlyStudent && roles.includes('auto_docente') && (
-        <FormByRole role="auto_docente" slug="auto" title="AUTOEVALUACIÓN" />
+        <FormByRole role="auto_docente" _slug="auto" title="AUTOEVALUACIÓN" />
       )}
 
       {/* Coord. Asignatura */}
       {!onlyStudent && roles.includes('coord_asignatura') && (
         <FormByRole
           role="coord_asignatura"
-          slug="coord-asig"
+          _slug="coord-asig"
           target="docente"
           title="EVALUACIÓN (Coordinador/a de Asignatura → docentes)"
         />
@@ -370,13 +372,13 @@ export default function Page() {
         <>
           <FormByRole
             role="coord_nivelacion"
-            slug="coord-nivel-docentes"
+            _slug="coord-nivel-docentes"
             target="docente"
             title="EVALUACIÓN (Coordinación de Nivelación → docentes)"
           />
           <FormByRole
             role="coord_nivelacion"
-            slug="coord-nivel-coord"
+            _slug="coord-nivel-coord"
             target="coord"
             title="EVALUACIÓN (Coordinación de Nivelación → coordinadores de asignatura)"
           />
@@ -385,3 +387,4 @@ export default function Page() {
     </main>
   );
 }
+
