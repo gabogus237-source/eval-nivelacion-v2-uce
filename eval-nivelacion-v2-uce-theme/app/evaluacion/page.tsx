@@ -27,22 +27,12 @@ export default function Evaluacion() {
       const e = data.user?.email?.toLowerCase() ?? null;
       setEmail(e);
 
-      if (!e) {
-        setRoles([]);
-        return;
-      }
-      if (!e.endsWith('@uce.edu.ec')) {
-        // correos externos de prueba
-        setRoles(['estudiante']);
-        return;
-      }
+      if (!e) { setRoles([]); return; }
+      if (!e.endsWith('@uce.edu.ec')) { setRoles(['estudiante']); return; }
+
       const { data: r, error } = await supabase.rpc<Rol[]>('api_current_roles');
-      if (error) {
-        console.error(error);
-        setRoles(['estudiante']); // fallback seguro
-      } else {
-        setRoles((r ?? []) as Rol[]);
-      }
+      if (error) { console.error(error); setRoles(['estudiante']); }
+      else { setRoles((r ?? []) as Rol[]); }
     })();
   }, []);
 
@@ -79,36 +69,57 @@ export default function Evaluacion() {
       });
   }, [modalidad]);
 
-  // ===== 4) Curso => docentes + preparar respuestas =====
+  // ===== 4) Curso => docentes + preparar respuestas (SIN FK: 2 llamadas) =====
   useEffect(() => {
     if (!curso) return;
-    supabase
-      // requiere FK ofertas_docentes.docente_id -> docentes.id
-      .from('ofertas_docentes')
-      .select('docente_id, docentes(nombre)')
-      .eq('curso_id', curso)
-      .then(({ data, error }) => {
-        if (error) console.error(error);
-        const ds: Docente[] = ((data ?? []) as any[]).map(r => ({
-          docente_id: Number(r.docente_id),
-          nombre: (r.docentes?.nombre as string) ?? 'Docente',
-        }));
-        setDocentes(ds);
-        setRespuestas(prev => {
-          const next = { ...prev };
-          ds.forEach(d => {
-            if (!next[d.docente_id]) {
-              next[d.docente_id] = {
-                no_aplica: false,
-                respuestas: {},
-                lo_mejor: '',
-                a_mejorar: '',
-              };
-            }
-          });
-          return next;
+
+    (async () => {
+      // 1) IDs desde ofertas_docentes
+      const { data: filas, error: e1 } = await supabase
+        .from('ofertas_docentes')
+        .select('docente_id')
+        .eq('curso_id', curso);
+
+      if (e1) { console.error(e1); setDocentes([]); return; }
+
+      const ids = Array.from(new Set((filas ?? []).map((r: any) => Number(r.docente_id))));
+      if (ids.length === 0) { setDocentes([]); return; }
+
+      // 2) Nombres desde docentes
+      const { data: dsData, error: e2 } = await supabase
+        .from('docentes')
+        .select('id,nombre')
+        .in('id', ids);
+
+      if (e2) console.error(e2);
+
+      const nameById: Record<number, string> = Object.fromEntries(
+        (dsData ?? []).map((d: any) => [Number(d.id), String(d.nombre ?? '')])
+      );
+
+      const ds: Docente[] = ids.map((id) => ({
+        docente_id: id,
+        nombre: nameById[id] || `Docente ${id}`,
+      }));
+
+      setDocentes(ds);
+
+      // preparar estructura de respuestas
+      setRespuestas(prev => {
+        const next = { ...prev };
+        ds.forEach(d => {
+          if (!next[d.docente_id]) {
+            next[d.docente_id] = {
+              no_aplica: false,
+              respuestas: {},
+              lo_mejor: '',
+              a_mejorar: '',
+            };
+          }
         });
+        return next;
       });
+    })();
   }, [curso]);
 
   // ===== Handlers =====
@@ -163,16 +174,16 @@ export default function Evaluacion() {
       a_mejorar: respuestas[d.docente_id].a_mejorar || null,
     }));
 
-    // Usa tu RPC si existe, si no, te dejo un INSERT de respaldo (comenta el que no uses)
+    // RPC servidor (si existe)
     const { error } = await supabase.rpc('submit_eval_curso', {
       p_curso_id: curso,
       p_modalidad: modalidad,
       p_payload: payload,
     });
 
-    // // Alternativa: inserción directa (activa solo si NO tienes el RPC):
+    // // Alternativa directa si no tienes ese RPC:
     // const { error } = await supabase.from('eval_nivelacion').insert(
-    //   payload.map((row: any) => ({
+    //   payload.map(row => ({
     //     rol: 'estudiante',
     //     modalidad,
     //     curso_id: curso,
@@ -185,10 +196,7 @@ export default function Evaluacion() {
     // );
 
     if (error) setMsg(error.message);
-    else {
-      alert('¡Evaluación enviada!');
-      location.href = '/';
-    }
+    else { alert('¡Evaluación enviada!'); location.href = '/'; }
   }
 
   // ===== Renders =====
