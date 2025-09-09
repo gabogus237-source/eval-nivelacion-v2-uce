@@ -1,11 +1,12 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
+import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
 
 /** ===== Tipos ===== */
 type Rol = 'estudiante' | 'auto_docente' | 'coord_asignatura' | 'coord_nivelacion';
 type Item = {
-  item_id: number;
+  pregunta_id: number;     // <-- antes tenías item_id; la RPC devuelve pregunta_id
   categoria: string;
   pregunta: string;
   orden: number;
@@ -13,10 +14,63 @@ type Item = {
   escala_max: number;
 };
 
+/** ===== Login inline (Magic Link) ===== */
+function InlineMagicLink() {
+  const [email, setEmail] = useState('');
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (!/@uce\.edu\.ec$/i.test(email.trim())) {
+      setError('Usa tu correo institucional @uce.edu.ec');
+      return;
+    }
+    const redirectTo = window.location.origin;
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim().toLowerCase(),
+      options: { emailRedirectTo: redirectTo },
+    });
+    if (error) setError(error.message);
+    else setSent(true);
+  };
+
+  if (sent) {
+    return (
+      <div className="max-w-md mx-auto p-6 bg-white rounded-2xl shadow">
+        <h1 className="text-xl font-semibold mb-2">Revisa tu correo</h1>
+        <p>Te enviamos un enlace a tu <b>@uce.edu.ec</b>. Ábrelo para iniciar sesión.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-md mx-auto p-6 bg-white rounded-2xl shadow">
+      <h1 className="text-xl font-semibold mb-4">Inicia sesión</h1>
+      <p className="text-sm mb-4">Usa tu correo institucional <b>@uce.edu.ec</b>.</p>
+      <form onSubmit={submit} className="space-y-3">
+        <input
+          type="email"
+          placeholder="tu_correo@uce.edu.ec"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="w-full border rounded-xl p-3"
+          required
+        />
+        {error && <p className="text-red-600 text-sm">{error}</p>}
+        <button type="submit" className="w-full rounded-xl p-3 bg-black text-white">
+          Enviarme enlace mágico
+        </button>
+      </form>
+    </div>
+  );
+}
+
 /** ===== Formulario genérico por rol ===== */
 function FormByRole({
   role,
-  slug,
+  slug, // ← ya no se usa, pero se mantiene por compatibilidad
   target = null,
   title,
 }: {
@@ -26,8 +80,8 @@ function FormByRole({
   title: string;
 }) {
   const [items, setItems] = useState<Item[] | null>(null);
-  const [usedSlug, setUsedSlug] = useState<string>(''); // para debug
   const [loading, setLoading] = useState(true);
+  const [showLogin, setShowLogin] = useState(false);      // <-- NUEVO
   const [vals, setVals] = useState<Record<number, number>>({});
   const [modalidad, setModalidad] = useState('');
   const [cursoId, setCursoId] = useState('');
@@ -37,79 +91,44 @@ function FormByRole({
   const [aMejorar, setAMejorar] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
 
-  // 🔎 Carga preguntas: intenta múltiples slugs candidatos hasta que encuentre items
+  // ✅ Carga preguntas SOLO por rol, y SOLO si hay sesión
   useEffect(() => {
     let on = true;
     (async () => {
       setLoading(true);
 
-      const variants = (s: string) =>
-        [
-          s,
-          s.replace('/eval/', '/'),
-          s.replace('/eval/', ''),
-          s.replace(/^\/+/, ''),
-          s.startsWith('/') ? s.slice(1) : `/${s}`,
-        ].map((x) => x.trim());
-
-      // Lista de candidatos por rol (puedes añadir más alias si usas otros)
-      const candidateSlugs = Array.from(
-        new Set([
-          ...variants(slug),
-          role === 'estudiante'
-            ? ['estudiante', '/estudiante', 'estudiantes', '/estudiantes', 'alumno', '/alumno']
-            : [],
-          role === 'auto_docente' ? ['auto', '/auto', 'autoevaluacion', '/autoevaluacion'] : [],
-          role === 'coord_asignatura'
-            ? ['coord-asig', '/coord-asig', 'coordinador-asig', '/coordinador-asig']
-            : [],
-          role === 'coord_nivelacion'
-            ? [
-                'coord-nivel-docentes',
-                '/coord-nivel-docentes',
-                'coord-nivel-coord',
-                '/coord-nivel-coord',
-                'coord-nivelacion',
-                '/coord-nivelacion',
-              ]
-            : [],
-        ].flat())
-      );
-
-      let found: Item[] | null = null;
-      let used = '';
-
-      for (const s of candidateSlugs) {
-        const { data, error } = await supabase.rpc('api_items_autorizado', {
-          p_rol: role,
-          p_slug: s,
-        });
-        if (error) {
-          console.warn('api_items_autorizado error con slug', s, error.message);
-          continue;
-        }
-        if (Array.isArray(data) && data.length > 0) {
-          found = data as Item[];
-          used = s;
-          break;
-        }
+      // 1) verificar sesión
+      const { data: s } = await supabase.auth.getSession();
+      if (!on) return;
+      if (!s?.session) {
+        setShowLogin(true);
+        setItems(null);
+        setLoading(false);
+        return;
       }
 
+      // 2) traer preguntas por rol/periodo desde la RPC correcta
+      const periodo = '2025-2025';
+      const { data, error } = await supabase.rpc('get_preguntas_para', {
+        rol_in: role,
+        periodo_in: periodo,
+      });
+
       if (!on) return;
-      setItems(found ?? []);
-      setUsedSlug(used);
+      if (error) {
+        console.error('RPC get_preguntas_para error:', error);
+        setItems([]);
+      } else {
+        setItems((data ?? []) as Item[]);
+      }
       setLoading(false);
     })();
-    return () => {
-      on = false;
-    };
-  }, [role, slug]);
+    return () => { on = false; };
+  }, [role]);
 
   const porCategoria = useMemo(() => {
     const g: Record<string, Item[]> = {};
-    (items ?? []).forEach((it) => {
-      (g[it.categoria] ||= []).push(it);
-    });
+    (items ?? []).forEach((it) => { (g[it.categoria] ||= []).push(it); });
     return g;
   }, [items]);
 
@@ -123,10 +142,8 @@ function FormByRole({
       rol: role,
       modalidad: modalidad || null,
       curso_id: cursoId || null,
-      docente_id:
-        target === 'docente' ? (docenteId ? Number(docenteId) : null) : null,
-      coord_asignatura_id:
-        target === 'coord' ? (coordAsigId ? Number(coordAsigId) : null) : null,
+      docente_id: target === 'docente' ? (docenteId ? Number(docenteId) : null) : null,
+      coord_asignatura_id: target === 'coord' ? (coordAsigId ? Number(coordAsigId) : null) : null,
       no_aplica: false,
       respuestas: vals,
       lo_mejor: loMejor || null,
@@ -146,27 +163,15 @@ function FormByRole({
     }
   };
 
+  // ===== Render =====
   if (loading) return <div className="p-4">Cargando preguntas…</div>;
+  if (showLogin) return <InlineMagicLink />; // <-- si no hay sesión, mostramos login
   if (!items || items.length === 0)
-    return (
-      <div className="p-4">
-        No hay preguntas para este instrumento.
-        {process.env.NEXT_PUBLIC_SHOW_ROLE_DEBUG === '1' && usedSlug && (
-          <div className="text-xs text-gray-500 mt-1">
-            (Intentado slug: <code>{usedSlug}</code>)
-          </div>
-        )}
-      </div>
-    );
+    return <div className="p-4">No hay preguntas para este instrumento.</div>;
 
   return (
     <section className="card space-y-6">
       <h2 className="text-xl font-semibold">{title}</h2>
-      {process.env.NEXT_PUBLIC_SHOW_ROLE_DEBUG === '1' && usedSlug && (
-        <div className="text-xs text-gray-500">
-          Usando slug: <code>{usedSlug}</code>
-        </div>
-      )}
 
       <form onSubmit={onSubmit} className="space-y-6">
         <div className="grid sm:grid-cols-2 gap-3">
@@ -219,24 +224,19 @@ function FormByRole({
             <h3 className="font-semibold mb-3">{cat}</h3>
             <div className="space-y-3">
               {arr.map((it) => (
-                <div
-                  key={it.item_id}
-                  className="grid md:grid-cols-2 gap-2 items-center"
-                >
+                <div key={it.pregunta_id} className="grid md:grid-cols-2 gap-2 items-center">
                   <div className="text-sm">{it.pregunta}</div>
                   <div className="flex gap-3 justify-start md:justify-end">
-                    {Array.from({
-                      length: it.escala_max - it.escala_min + 1,
-                    }).map((_, i) => {
+                    {Array.from({ length: it.escala_max - it.escala_min + 1 }).map((_, i) => {
                       const v = it.escala_min + i;
                       return (
                         <label key={v} className="inline-flex items-center gap-1">
                           <input
                             type="radio"
-                            name={`item-${it.item_id}`}
+                            name={`item-${it.pregunta_id}`}   // <-- usa pregunta_id
                             value={v}
-                            checked={vals[it.item_id] === v}
-                            onChange={(e) => setValor(it.item_id, e.target.value)}
+                            checked={vals[it.pregunta_id] === v}
+                            onChange={(e) => setValor(it.pregunta_id, e.target.value)}
                           />
                           <span className="text-xs">{v}</span>
                         </label>
@@ -285,18 +285,25 @@ export default function Page() {
   useEffect(() => {
     let alive = true;
     (async () => {
+      // Importante: no forzamos roles si no hay sesión. Deja que FormByRole muestre login.
       const { data: u } = await supabase.auth.getUser();
       const email = u?.user?.email?.toLowerCase() ?? '';
       if (!alive) return;
       setUserEmail(email);
 
-      // 🔒 Si NO es @uce.edu.ec ⇒ solo Estudiantes
-      if (email && !email.endsWith('@uce.edu.ec')) {
+      if (!email) {
+        // Sin sesión: deja roles nulo; la UI de cada FormByRole mostrará login.
+        setRoles(['estudiante']); // puedes dejar solo estudiantes visibles
+        return;
+      }
+
+      // Si no es institucional, restringe a estudiantes
+      if (!email.endsWith('@uce.edu.ec')) {
         setRoles(['estudiante']);
         return;
       }
 
-      // Institucional: pide roles reales
+      // Institucional: intenta leer roles reales (si falla, cae a estudiante)
       const { data, error } = await supabase.rpc<Rol[]>('api_current_roles');
       if (!alive) return;
       if (error) {
@@ -306,9 +313,7 @@ export default function Page() {
         setRoles((data ?? []) as Rol[]);
       }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
   if (!roles) return <main className="p-6">Cargando…</main>;
@@ -329,7 +334,7 @@ export default function Page() {
       {roles.includes('estudiante') && (
         <FormByRole
           role="estudiante"
-          slug="estudiante" // slug base; el buscador probará variantes
+          slug="estudiante"
           title="EVALUACIÓN DE ESTUDIANTES"
         />
       )}
