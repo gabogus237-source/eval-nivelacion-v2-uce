@@ -14,8 +14,6 @@ type Item = {
   escala_max: number;
 };
 
-type VoidArgs = Record<string, never>; // para RPC sin argumentos
-
 /** ===== Login inline (Magic Link) ===== */
 function InlineMagicLink() {
   const [email, setEmail] = useState('');
@@ -42,9 +40,7 @@ function InlineMagicLink() {
     return (
       <div className="max-w-md mx-auto p-6 bg-white rounded-2xl shadow">
         <h1 className="text-xl font-semibold mb-2">Revisa tu correo</h1>
-        <p>
-          Te enviamos un enlace a tu <b>@uce.edu.ec</b>. Ábrelo para iniciar sesión.
-        </p>
+        <p>Te enviamos un enlace a tu <b>@uce.edu.ec</b>. Ábrelo para iniciar sesión.</p>
       </div>
     );
   }
@@ -52,9 +48,7 @@ function InlineMagicLink() {
   return (
     <div className="max-w-md mx-auto p-6 bg-white rounded-2xl shadow">
       <h1 className="text-xl font-semibold mb-4">Inicia sesión</h1>
-      <p className="text-sm mb-4">
-        Usa tu correo institucional <b>@uce.edu.ec</b>.
-      </p>
+      <p className="text-sm mb-4">Usa tu correo institucional <b>@uce.edu.ec</b>.</p>
       <form onSubmit={submit} className="space-y-3">
         <input
           type="email"
@@ -113,12 +107,9 @@ function FormByRole({
         return;
       }
 
-      // 2) traer preguntas por rol/periodo desde la RPC tipada
+      // 2) traer preguntas por rol/periodo (sin genéricos en rpc)
       const periodo = '2025-2025';
-      const { data, error } = await supabase.rpc<
-        Item[],
-        { rol_in: Rol; periodo_in: string }
-      >('get_preguntas_para', {
+      const { data, error } = await supabase.rpc('get_preguntas_para', {
         rol_in: role,
         periodo_in: periodo,
       });
@@ -128,7 +119,7 @@ function FormByRole({
         console.error('RPC get_preguntas_para error:', error);
         setItems([]);
       } else {
-        setItems(data ?? []);
+        setItems(((data as Item[]) ?? []) as Item[]);
       }
       setLoading(false);
     })();
@@ -316,14 +307,14 @@ export default function Page() {
         return;
       }
 
-      // Institucional: intenta leer roles reales (si falla, cae a estudiante)
-      const { data, error } = await supabase.rpc<Rol[], VoidArgs>('api_current_roles', {});
+      // Institucional: intenta leer roles reales (sin genéricos en rpc)
+      const { data, error } = await supabase.rpc('api_current_roles');
       if (!alive) return;
       if (error) {
         console.error(error);
         setRoles(['estudiante']);
       } else {
-        setRoles((data ?? []) as Rol[]);
+        setRoles(((data as Rol[]) ?? []) as Rol[]);
       }
     })();
     return () => {
@@ -385,3 +376,4 @@ export default function Page() {
     </main>
   );
 }
+
