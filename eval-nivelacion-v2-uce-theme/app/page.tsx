@@ -70,12 +70,10 @@ function InlineMagicLink() {
 /** ===== Formulario genérico por rol ===== */
 function FormByRole({
   role,
-  _slug, // (no usado) se mantiene por compatibilidad
   target = null,
   title,
 }: {
   role: Rol;
-  _slug: string;
   target?: 'docente' | 'coord' | null;
   title: string;
 }) {
@@ -83,12 +81,17 @@ function FormByRole({
   const [loading, setLoading] = useState(true);
   const [showLogin, setShowLogin] = useState(false);
   const [vals, setVals] = useState<Record<number, number>>({});
+
+  // Campos cabecera
   const [modalidad, setModalidad] = useState('');
   const [cursoId, setCursoId] = useState('');
   const [docenteId, setDocenteId] = useState('');
   const [coordAsigId, setCoordAsigId] = useState('');
+
+  // Comentarios
   const [loMejor, setLoMejor] = useState('');
   const [aMejorar, setAMejorar] = useState('');
+
   const [msg, setMsg] = useState<string | null>(null);
 
   // ✅ Carga preguntas SOLO por rol, y SOLO si hay sesión
@@ -107,7 +110,7 @@ function FormByRole({
         return;
       }
 
-      // 2) traer preguntas por rol/periodo (sin genéricos en rpc)
+      // 2) traer preguntas por rol/periodo
       const periodo = '2025-2025';
       const { data, error } = await supabase.rpc('get_preguntas_para', {
         rol_in: role,
@@ -135,20 +138,34 @@ function FormByRole({
   const setValor = (id: number, v: number | string) =>
     setVals((p) => ({ ...p, [id]: Number(v) }));
 
+  // Validaciones simples en cliente
+  const validateHeader = () => {
+    if (!modalidad) return 'Selecciona la modalidad.';
+    if (!cursoId.trim()) return 'Ingresa el Curso ID.';
+    if (target === 'docente' && !docenteId.trim()) return 'Ingresa el ID del docente.';
+    if (target === 'coord' && !coordAsigId.trim()) return 'Ingresa el ID del coordinador/a de asignatura.';
+    return null;
+  };
+
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMsg(null);
+
+    const v = validateHeader();
+    if (v) { setMsg('⚠ ' + v); return; }
+
     const payload: any = {
       rol: role,
-      modalidad: modalidad || null,
-      curso_id: cursoId || null,
-      docente_id: target === 'docente' ? (docenteId ? Number(docenteId) : null) : null,
-      coord_asignatura_id: target === 'coord' ? (coordAsigId ? Number(coordAsigId) : null) : null,
+      modalidad,
+      curso_id: cursoId,
+      docente_id: target === 'docente' ? Number(docenteId) || null : null,
+      coord_asignatura_id: target === 'coord' ? Number(coordAsigId) || null : null,
       no_aplica: false,
       respuestas: vals,
       lo_mejor: loMejor || null,
       a_mejorar: aMejorar || null,
     };
+
     const { error } = await supabase.from('eval_nivelacion').insert([payload]);
     if (error) {
       console.error(error);
@@ -160,6 +177,7 @@ function FormByRole({
       setAMejorar('');
       setDocenteId('');
       setCoordAsigId('');
+      // No reseteo modalidad/curso para no obligar a reescribirlos
     }
   };
 
@@ -176,44 +194,54 @@ function FormByRole({
       <form onSubmit={onSubmit} className="space-y-6">
         <div className="grid sm:grid-cols-2 gap-3">
           <div>
-            <label className="label">Modalidad</label>
-            <input
+            <label className="label">Modalidad <span className="text-red-600">*</span></label>
+            <select
               className="input"
               value={modalidad}
               onChange={(e) => setModalidad(e.target.value)}
-              placeholder="Presencial / Distancia"
-            />
+              required
+            >
+              <option value="" disabled>Selecciona…</option>
+              <option value="Presencial">Presencial</option>
+              <option value="Virtual">Virtual</option>
+              <option value="Mixta">Mixta</option>
+              <option value="Distancia">Distancia</option>
+            </select>
           </div>
+
           <div>
-            <label className="label">Curso ID</label>
+            <label className="label">Curso ID <span className="text-red-600">*</span></label>
             <input
               className="input"
               value={cursoId}
               onChange={(e) => setCursoId(e.target.value)}
               placeholder="FAC-ADM-..."
+              required
             />
           </div>
 
           {target === 'docente' && (
             <div className="sm:col-span-2">
-              <label className="label">Docente ID</label>
+              <label className="label">Docente ID <span className="text-red-600">*</span></label>
               <input
                 className="input"
                 value={docenteId}
                 onChange={(e) => setDocenteId(e.target.value)}
                 placeholder="ID numérico del docente"
+                required
               />
             </div>
           )}
 
           {target === 'coord' && (
             <div className="sm:col-span-2">
-              <label className="label">Coordinador/a de asignatura ID</label>
+              <label className="label">Coordinador/a de asignatura ID <span className="text-red-600">*</span></label>
               <input
                 className="input"
                 value={coordAsigId}
                 onChange={(e) => setCoordAsigId(e.target.value)}
                 placeholder="ID numérico de coordinador/a"
+                required
               />
             </div>
           )}
@@ -237,6 +265,7 @@ function FormByRole({
                             value={v}
                             checked={vals[it.pregunta_id] === v}
                             onChange={(e) => setValor(it.pregunta_id, e.target.value)}
+                            required
                           />
                           <span className="text-xs">{v}</span>
                         </label>
@@ -277,91 +306,126 @@ function FormByRole({
   );
 }
 
-/** ===== Página (clamp por email) ===== */
+/** ===== Página con selector de Rol ===== */
 export default function Page() {
   const [userEmail, setUserEmail] = useState<string>('');
   const [roles, setRoles] = useState<Rol[] | null>(null);
+  const [selectedRole, setSelectedRole] = useState<Rol | null>(null);
 
   useEffect(() => {
     let alive = true;
     (async () => {
-      // Importante: no forzamos roles si no hay sesión. Deja que FormByRole muestre login.
       const { data: u } = await supabase.auth.getUser();
       const email = u?.user?.email?.toLowerCase() ?? '';
       if (!alive) return;
       setUserEmail(email);
 
       if (!email) {
-        // Sin sesión: muestra solo estudiantes (el formulario pedirá login)
+        // Sin sesión todavía → muestra rol estudiante por defecto (el form pedirá login)
         setRoles(['estudiante']);
+        setSelectedRole('estudiante');
         return;
       }
 
-      // Si no es institucional, restringe a estudiantes
       if (!email.endsWith('@uce.edu.ec')) {
         setRoles(['estudiante']);
+        setSelectedRole('estudiante');
         return;
       }
 
-      // Institucional: intenta leer roles reales (sin genéricos en rpc)
       const { data, error } = await supabase.rpc('api_current_roles');
       if (!alive) return;
+
       if (error) {
         console.error(error);
         setRoles(['estudiante']);
+        setSelectedRole('estudiante');
       } else {
-        setRoles(((data ?? []) as Rol[]));
+        const r = ((data ?? []) as Rol[]);
+        setRoles(r.length ? r : ['estudiante']);
+        setSelectedRole((r[0] ?? 'estudiante'));
       }
     })();
     return () => { alive = false; };
   }, []);
 
-  if (!roles) return <main className="p-6">Cargando…</main>;
-  const onlyStudent = roles.length === 1 && roles[0] === 'estudiante';
+  if (!roles || !selectedRole) return <main className="p-6">Cargando…</main>;
+
   const showDebug = process.env.NEXT_PUBLIC_SHOW_ROLE_DEBUG === '1';
 
   return (
-    <main className="space-y-10">
-      {showDebug && (
-        <div className="p-3 rounded-lg border bg-yellow-50 text-sm">
-          <div><b>DEBUG</b></div>
-          <div>Email: {userEmail || '(sin sesión)'}</div>
-          <div>Roles: {roles.join(', ') || '(vacío)'}</div>
+    <main className="space-y-8">
+      {/* Barra superior / debug */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-lg font-semibold">Evaluación Docente — Nivelación 1S-2025-2025</h1>
+        <span className="px-3 py-1 rounded-full bg-emerald-700 text-white text-sm">Periodo actual</span>
+      </div>
+
+      {/* Panel de identidad y selección de Rol */}
+      <div className="p-3 rounded-lg border bg-white/60">
+        <div className="grid md:grid-cols-3 gap-3 items-end">
+          <div>
+            <label className="label">Correo</label>
+            <input className="input" value={userEmail || '(sin sesión)'} readOnly />
+          </div>
+
+          <div>
+            <label className="label">Rol</label>
+            <select
+              className="input"
+              value={selectedRole}
+              onChange={(e) => setSelectedRole(e.target.value as Rol)}
+              // Si solo hay un rol, el selector queda visible pero deshabilitado (para que "aparezca la opción")
+              disabled={roles.length === 1}
+            >
+              {roles.map((r) => (
+                <option key={r} value={r}>
+                  {r.replace(/_/g, ' ')}
+                </option>
+              ))}
+            </select>
+            {roles.length === 1 && (
+              <p className="text-xs text-gray-500 mt-1">
+                (Tu cuenta solo tiene el rol <b>{roles[0]}</b>)
+              </p>
+            )}
+          </div>
+
+          {showDebug && (
+            <div className="text-sm">
+              <div className="font-semibold">DEBUG</div>
+              <div>Roles: {roles.join(', ')}</div>
+            </div>
+          )}
         </div>
+      </div>
+
+      {/* Render del formulario según rol seleccionado */}
+      {selectedRole === 'estudiante' && (
+        <FormByRole role="estudiante" title="EVALUACIÓN DE ESTUDIANTES" />
       )}
 
-      {/* Estudiantes */}
-      {roles.includes('estudiante') && (
-        <FormByRole role="estudiante" _slug="estudiante" title="EVALUACIÓN DE ESTUDIANTES" />
+      {selectedRole === 'auto_docente' && (
+        <FormByRole role="auto_docente" title="AUTOEVALUACIÓN" />
       )}
 
-      {/* Autoevaluación */}
-      {!onlyStudent && roles.includes('auto_docente') && (
-        <FormByRole role="auto_docente" _slug="auto" title="AUTOEVALUACIÓN" />
-      )}
-
-      {/* Coord. Asignatura */}
-      {!onlyStudent && roles.includes('coord_asignatura') && (
+      {selectedRole === 'coord_asignatura' && (
         <FormByRole
           role="coord_asignatura"
-          _slug="coord-asig"
           target="docente"
           title="EVALUACIÓN (Coordinador/a de Asignatura → docentes)"
         />
       )}
 
-      {/* Coord. Nivelación */}
-      {!onlyStudent && roles.includes('coord_nivelacion') && (
+      {selectedRole === 'coord_nivelacion' && (
         <>
           <FormByRole
             role="coord_nivelacion"
-            _slug="coord-nivel-docentes"
             target="docente"
             title="EVALUACIÓN (Coordinación de Nivelación → docentes)"
           />
           <FormByRole
             role="coord_nivelacion"
-            _slug="coord-nivel-coord"
             target="coord"
             title="EVALUACIÓN (Coordinación de Nivelación → coordinadores de asignatura)"
           />
