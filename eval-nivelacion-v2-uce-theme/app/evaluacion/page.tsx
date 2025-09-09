@@ -1,9 +1,11 @@
 'use client';
+
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
 /** ===== Tipos ===== */
 type Rol = 'estudiante' | 'auto_docente' | 'coord_asignatura' | 'coord_nivelacion';
+
 type Item = {
   pregunta_id: number;
   categoria: string;
@@ -77,10 +79,10 @@ function InlineMagicLink() {
   );
 }
 
-/** ===== Formulario genérico por rol ===== */
+/** ===== Formulario por rol ===== */
 function FormByRole({
   role,
-  slug, // compatibilidad con tu código original
+  slug, // compatibilidad con tu código previo (no usado)
   target = null,
   title,
 }: {
@@ -93,16 +95,16 @@ function FormByRole({
   const [loading, setLoading] = useState(true);
   const [showLogin, setShowLogin] = useState(false);
 
-  // Catálogo de cursos
+  // Catálogo y selección
   const [cursos, setCursos] = useState<Curso[]>([]);
   const [cursoId, setCursoId] = useState('');
-  const [modalidad, setModalidad] = useState(''); // solo Presencial | Distancia
+  const [modalidad, setModalidad] = useState(''); // Presencial | Distancia
 
-  // Docentes por curso
+  // Docentes
   const [docentes, setDocentes] = useState<Docente[]>([]);
-  const [docenteId, setDocenteId] = useState<string>(''); // string para el select
+  const [docenteId, setDocenteId] = useState<string>('');
 
-  // Campo para coord asignatura (cuando target="coord")
+  // Para target="coord"
   const [coordAsigId, setCoordAsigId] = useState('');
 
   // Respuestas y comentarios
@@ -111,7 +113,7 @@ function FormByRole({
   const [aMejorar, setAMejorar] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
 
-  // Carga preguntas + catálogo de cursos (solo con sesión)
+  // Carga preguntas + cursos (solo con sesión)
   useEffect(() => {
     let on = true;
     (async () => {
@@ -140,7 +142,7 @@ function FormByRole({
         console.error('RPC get_preguntas_para error:', error);
         setItems([]);
       } else {
-        setItems(((data ?? []) as Item[]));
+        setItems((data ?? []) as Item[]);
       }
 
       // 3) catálogo de cursos
@@ -159,10 +161,12 @@ function FormByRole({
 
       setLoading(false);
     })();
-    return () => { on = false; };
+    return () => {
+      on = false;
+    };
   }, [role]);
 
-  // Al elegir curso: autocompletar modalidad (solo 'Presencial' | 'Distancia') y cargar docentes
+  // Al elegir curso: modalidad y docentes
   useEffect(() => {
     if (!cursoId) {
       setModalidad('');
@@ -170,84 +174,92 @@ function FormByRole({
       setDocenteId('');
       return;
     }
+
+    // Autocompletar modalidad solo Presencial | Distancia
     const c = cursos.find((x) => x.curso_id === cursoId);
     if (c) {
       const m = (c.modalidad || '').toLowerCase();
       setModalidad(m.includes('presencial') ? 'Presencial' : 'Distancia');
     }
 
-    // Cargar docentes del curso
+    // Cargar docentes asociados (2 pasos: ids -> docentes)
     (async () => {
-      // 1) Intento preferido: tabla de mapeo coordinadores_docentes con relación a docentes
-      const { data, error } = await supabase
+      // 1) ids desde coordinadores_docentes
+      const { data: mapRows, error: mapErr } = await supabase
         .from('coordinadores_docentes')
-        .select(`
-          docente_id,
-          docentes:docente_id ( id, nombre, nombres, apellidos )
-        `)
+        .select('docente_id')
         .eq('curso_id', cursoId);
 
-      if (!error && Array.isArray(data)) {
-        const list: Docente[] = (data as any[]).map((row) => {
-          const d = row.docentes || {};
-          const id = Number(row.docente_id ?? d.id);
-          const display =
-            d.nombre ||
-            [d.nombres, d.apellidos].filter(Boolean).join(' ') ||
-            `Docente #${id}`;
-        return { id, display };
-        }).filter((d) => Number.isFinite(d.id));
-        // Si no trajo nada, cae al fallback más abajo
-        if (list.length > 0) {
-          setDocentes(list);
-          setDocenteId(''); // forzar selección
-          return;
+      if (!mapErr && Array.isArray(mapRows) && mapRows.length > 0) {
+        const ids = (mapRows as any[])
+          .map((r) => Number(r.docente_id))
+          .filter((n) => Number.isFinite(n));
+        if (ids.length > 0) {
+          const { data: docs, error: docsErr } = await supabase
+            .from('docentes')
+            .select('id, nombre, nombres, apellidos')
+            .in('id', ids)
+            .order('id', { ascending: true });
+
+          if (!docsErr && Array.isArray(docs)) {
+            setDocentes(
+              (docs as any[]).map((d) => ({
+                id: Number(d.id),
+                display:
+                  d.nombre ||
+                  [d.nombres, d.apellidos].filter(Boolean).join(' ') ||
+                  `Docente #${d.id}`,
+              }))
+            );
+            setDocenteId('');
+            return;
+          }
         }
       }
 
-      // 2) Fallback: listar todos los docentes
+      // 2) Fallback: todos los docentes
       const { data: all, error: errAll } = await supabase
         .from('docentes')
         .select('id, nombre, nombres, apellidos')
         .order('id', { ascending: true });
 
       if (!errAll && Array.isArray(all)) {
-        const list: Docente[] = (all as any[]).map((d: any) => ({
-          id: Number(d.id),
-          display:
-            d.nombre ||
-            [d.nombres, d.apellidos].filter(Boolean).join(' ') ||
-            `Docente #${d.id}`,
-        }));
-        setDocentes(list);
-        setDocenteId('');
+        setDocentes(
+          (all as any[]).map((d) => ({
+            id: Number(d.id),
+            display:
+              d.nombre ||
+              [d.nombres, d.apellidos].filter(Boolean).join(' ') ||
+              `Docente #${d.id}`,
+          }))
+        );
       } else {
         console.error('No fue posible cargar docentes:', errAll);
         setDocentes([]);
-        setDocenteId('');
       }
+      setDocenteId('');
     })();
   }, [cursoId, cursos]);
 
   const porCategoria = useMemo(() => {
     const g: Record<string, Item[]> = {};
-    (items ?? []).forEach((it) => { (g[it.categoria] ||= []).push(it); });
-    Object.values(g).forEach(arr => arr.sort((a, b) => a.orden - b.orden));
+    (items ?? []).forEach((it) => {
+      (g[it.categoria] ||= []).push(it);
+    });
+    Object.values(g).forEach((arr) => arr.sort((a, b) => a.orden - b.orden));
     return g;
   }, [items]);
 
   const setValor = (id: number, v: number | string) =>
     setVals((p) => ({ ...p, [id]: Number(v) }));
 
-  // Reglas: cuándo exigir docente
-  const requiereDocente =
-    role === 'estudiante' || target === 'docente';
+  // Cuándo exigir docente
+  const requiereDocente = role === 'estudiante' || target === 'docente';
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMsg(null);
 
-    // Validaciones mínimas
     if (!cursoId) { setMsg('⚠ Selecciona el curso.'); return; }
     if (!modalidad) { setMsg('⚠ Selecciona la modalidad.'); return; }
     if (requiereDocente && !docenteId) { setMsg('⚠ Selecciona el docente.'); return; }
@@ -310,7 +322,7 @@ function FormByRole({
             </select>
           </div>
 
-          {/* Modalidad solo Presencial | Distancia */}
+          {/* Modalidad (solo Presencial | Distancia) */}
           <div>
             <label className="label">Modalidad</label>
             <select
@@ -344,7 +356,7 @@ function FormByRole({
             </div>
           )}
 
-          {/* Coordinador/a de asignatura ID (solo cuando target="coord") */}
+          {/* Coordinador/a de asignatura ID (solo target="coord") */}
           {target === 'coord' && (
             <div className="sm:col-span-2">
               <label className="label">Coordinador/a de asignatura ID</label>
@@ -418,7 +430,7 @@ function FormByRole({
   );
 }
 
-/** ===== Página (clamp por email) ===== */
+/** ===== Página (roles por email) ===== */
 export default function Page() {
   const [userEmail, setUserEmail] = useState<string>('');
   const [roles, setRoles] = useState<Rol[] | null>(null);
@@ -447,8 +459,66 @@ export default function Page() {
         console.error(error);
         setRoles(['estudiante']);
       } else {
-        setRoles(((data ?? []) as Rol[]));
+        setRoles((data ?? []) as Rol[]);
       }
     })();
-    return () => { alive = false;
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (!roles) return <main className="p-6">Cargando…</main>;
+  const onlyStudent = roles.length === 1 && roles[0] === 'estudiante';
+  const showDebug = process.env.NEXT_PUBLIC_SHOW_ROLE_DEBUG === '1';
+
+  return (
+    <main className="space-y-10">
+      {showDebug && (
+        <div className="p-3 rounded-lg border bg-yellow-50 text-sm">
+          <div><b>DEBUG</b></div>
+          <div>Email: {userEmail || '(sin sesión)'}</div>
+          <div>Roles: {roles.join(', ') || '(vacío)'}</div>
+        </div>
+      )}
+
+      {/* Estudiantes */}
+      {roles.includes('estudiante') && (
+        <FormByRole role="estudiante" slug="estudiante" title="EVALUACIÓN DE ESTUDIANTES" />
+      )}
+
+      {/* Autoevaluación */}
+      {!onlyStudent && roles.includes('auto_docente') && (
+        <FormByRole role="auto_docente" slug="auto" title="AUTOEVALUACIÓN" />
+      )}
+
+      {/* Coord. Asignatura */}
+      {!onlyStudent && roles.includes('coord_asignatura') && (
+        <FormByRole
+          role="coord_asignatura"
+          slug="coord-asig"
+          target="docente"
+          title="EVALUACIÓN (Coordinador/a de Asignatura → docentes)"
+        />
+      )}
+
+      {/* Coord. Nivelación */}
+      {!onlyStudent && roles.includes('coord_nivelacion') && (
+        <>
+          <FormByRole
+            role="coord_nivelacion"
+            slug="coord-nivel-docentes"
+            target="docente"
+            title="EVALUACIÓN (Coordinación de Nivelación → docentes)"
+          />
+          <FormByRole
+            role="coord_nivelacion"
+            slug="coord-nivel-coord"
+            target="coord"
+            title="EVALUACIÓN (Coordinación de Nivelación → coordinadores de asignatura)"
+          />
+        </>
+      )}
+    </main>
+  );
+}
 
