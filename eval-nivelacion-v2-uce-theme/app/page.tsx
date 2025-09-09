@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabaseClient';
 /** ===== Tipos ===== */
 type Rol = 'estudiante' | 'auto_docente' | 'coord_asignatura' | 'coord_nivelacion';
 type Item = {
-  pregunta_id: number;
+  pregunta_id: number; // la RPC devuelve pregunta_id
   categoria: string;
   pregunta: string;
   orden: number;
@@ -14,7 +14,7 @@ type Item = {
   escala_max: number;
 };
 
-type VoidArgs = Record<string, never>;
+type VoidArgs = Record<string, never>; // para RPC sin argumentos
 
 /** ===== Login inline (Magic Link) ===== */
 function InlineMagicLink() {
@@ -42,7 +42,9 @@ function InlineMagicLink() {
     return (
       <div className="max-w-md mx-auto p-6 bg-white rounded-2xl shadow">
         <h1 className="text-xl font-semibold mb-2">Revisa tu correo</h1>
-        <p>Te enviamos un enlace a tu <b>@uce.edu.ec</b>. Ábrelo para iniciar sesión.</p>
+        <p>
+          Te enviamos un enlace a tu <b>@uce.edu.ec</b>. Ábrelo para iniciar sesión.
+        </p>
       </div>
     );
   }
@@ -50,7 +52,9 @@ function InlineMagicLink() {
   return (
     <div className="max-w-md mx-auto p-6 bg-white rounded-2xl shadow">
       <h1 className="text-xl font-semibold mb-4">Inicia sesión</h1>
-      <p className="text-sm mb-4">Usa tu correo institucional <b>@uce.edu.ec</b>.</p>
+      <p className="text-sm mb-4">
+        Usa tu correo institucional <b>@uce.edu.ec</b>.
+      </p>
       <form onSubmit={submit} className="space-y-3">
         <input
           type="email"
@@ -72,7 +76,7 @@ function InlineMagicLink() {
 /** ===== Formulario genérico por rol ===== */
 function FormByRole({
   role,
-  _slug, // (compatibilidad)
+  _slug, // (no usado) se mantiene por compatibilidad
   target = null,
   title,
 }: {
@@ -93,11 +97,13 @@ function FormByRole({
   const [aMejorar, setAMejorar] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
 
+  // ✅ Carga preguntas SOLO por rol, y SOLO si hay sesión
   useEffect(() => {
     let on = true;
     (async () => {
       setLoading(true);
 
+      // 1) verificar sesión
       const { data: s } = await supabase.auth.getSession();
       if (!on) return;
       if (!s?.session) {
@@ -107,6 +113,7 @@ function FormByRole({
         return;
       }
 
+      // 2) traer preguntas por rol/periodo desde la RPC tipada
       const periodo = '2025-2025';
       const { data, error } = await supabase.rpc<
         Item[],
@@ -169,8 +176,9 @@ function FormByRole({
     }
   };
 
+  // ===== Render =====
   if (loading) return <div className="p-4">Cargando preguntas…</div>;
-  if (showLogin) return <InlineMagicLink />;
+  if (showLogin) return <InlineMagicLink />; // si no hay sesión, mostramos login
   if (!items || items.length === 0)
     return <div className="p-4">No hay preguntas para este instrumento.</div>;
 
@@ -290,21 +298,25 @@ export default function Page() {
   useEffect(() => {
     let alive = true;
     (async () => {
+      // Importante: no forzamos roles si no hay sesión. Deja que FormByRole muestre login.
       const { data: u } = await supabase.auth.getUser();
       const email = u?.user?.email?.toLowerCase() ?? '';
       if (!alive) return;
       setUserEmail(email);
 
       if (!email) {
+        // Sin sesión: muestra solo estudiantes (el formulario pedirá login)
         setRoles(['estudiante']);
         return;
       }
 
+      // Si no es institucional, restringe a estudiantes
       if (!email.endsWith('@uce.edu.ec')) {
         setRoles(['estudiante']);
         return;
       }
 
+      // Institucional: intenta leer roles reales (si falla, cae a estudiante)
       const { data, error } = await supabase.rpc<Rol[], VoidArgs>('api_current_roles', {});
       if (!alive) return;
       if (error) {
@@ -333,14 +345,17 @@ export default function Page() {
         </div>
       )}
 
+      {/* Estudiantes */}
       {roles.includes('estudiante') && (
         <FormByRole role="estudiante" _slug="estudiante" title="EVALUACIÓN DE ESTUDIANTES" />
       )}
 
+      {/* Autoevaluación */}
       {!onlyStudent && roles.includes('auto_docente') && (
         <FormByRole role="auto_docente" _slug="auto" title="AUTOEVALUACIÓN" />
       )}
 
+      {/* Coord. Asignatura */}
       {!onlyStudent && roles.includes('coord_asignatura') && (
         <FormByRole
           role="coord_asignatura"
@@ -350,6 +365,7 @@ export default function Page() {
         />
       )}
 
+      {/* Coord. Nivelación */}
       {!onlyStudent && roles.includes('coord_nivelacion') && (
         <>
           <FormByRole
@@ -369,4 +385,5 @@ export default function Page() {
     </main>
   );
 }
+
 
