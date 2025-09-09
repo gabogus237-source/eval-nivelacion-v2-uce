@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
-/** ===== Tipos ===== */
+/** ===== Tipos locales (solo para TS) ===== */
 type Rol = 'estudiante' | 'auto_docente' | 'coord_asignatura' | 'coord_nivelacion';
 
 type Item = {
@@ -17,14 +17,11 @@ type Item = {
 
 type Curso = {
   curso_id: string;
-  modalidad: string | null;
+  modalidad: string | null; // 'Presencial' | 'Distancia'
   nombre: string | null;
 };
 
-type Docente = {
-  id: number;
-  display: string;
-};
+type Docente = { id: number; display: string };
 
 /** ===== Login inline (Magic Link) ===== */
 function InlineMagicLink() {
@@ -79,10 +76,10 @@ function InlineMagicLink() {
   );
 }
 
-/** ===== Formulario por rol ===== */
+/** ===== Formulario genérico por rol ===== */
 function FormByRole({
   role,
-  slug, // compatibilidad con tu código previo (no usado)
+  slug, // compatibilidad (no usado)
   target = null,
   title,
 }: {
@@ -95,12 +92,12 @@ function FormByRole({
   const [loading, setLoading] = useState(true);
   const [showLogin, setShowLogin] = useState(false);
 
-  // Catálogo y selección
+  // Catálogo de cursos
   const [cursos, setCursos] = useState<Curso[]>([]);
-  const [cursoId, setCursoId] = useState('');
   const [modalidad, setModalidad] = useState(''); // Presencial | Distancia
+  const [cursoId, setCursoId] = useState('');
 
-  // Docentes
+  // Docentes (según curso)
   const [docentes, setDocentes] = useState<Docente[]>([]);
   const [docenteId, setDocenteId] = useState<string>('');
 
@@ -113,7 +110,7 @@ function FormByRole({
   const [aMejorar, setAMejorar] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
 
-  // Carga preguntas + cursos (solo con sesión)
+  // Carga preguntas + catálogo (SOLO si hay sesión)
   useEffect(() => {
     let on = true;
     (async () => {
@@ -136,10 +133,9 @@ function FormByRole({
         rol_in: role,
         periodo_in: periodo,
       });
-
       if (!on) return;
       if (error) {
-        console.error('RPC get_preguntas_para error:', error);
+        console.error('get_preguntas_para error:', error);
         setItems([]);
       } else {
         setItems((data ?? []) as Item[]);
@@ -166,34 +162,44 @@ function FormByRole({
     };
   }, [role]);
 
-  // Al elegir curso: modalidad y docentes
+  // Cursos filtrados por modalidad
+  const cursosFiltrados = useMemo(() => {
+    const m = modalidad.toLowerCase();
+    if (!m) return [];
+    return cursos.filter((c) =>
+      (c.modalidad ?? '').toLowerCase().includes(m)
+    );
+  }, [cursos, modalidad]);
+
+  // Cuando cambia modalidad, reiniciar selección de curso y docentes
+  useEffect(() => {
+    setCursoId('');
+    setDocentes([]);
+    setDocenteId('');
+  }, [modalidad]);
+
+  // Al elegir curso: cargar docentes del curso
   useEffect(() => {
     if (!cursoId) {
-      setModalidad('');
       setDocentes([]);
       setDocenteId('');
       return;
     }
-
-    // Autocompletar modalidad solo Presencial | Distancia
-    const c = cursos.find((x) => x.curso_id === cursoId);
-    if (c) {
-      const m = (c.modalidad || '').toLowerCase();
-      setModalidad(m.includes('presencial') ? 'Presencial' : 'Distancia');
-    }
-
-    // Cargar docentes asociados (2 pasos: ids -> docentes)
     (async () => {
-      // 1) ids desde coordinadores_docentes
+      // 1) traer docente_id desde coordinadores_docentes
       const { data: mapRows, error: mapErr } = await supabase
         .from('coordinadores_docentes')
         .select('docente_id')
         .eq('curso_id', cursoId);
 
       if (!mapErr && Array.isArray(mapRows) && mapRows.length > 0) {
-        const ids = (mapRows as any[])
-          .map((r) => Number(r.docente_id))
-          .filter((n) => Number.isFinite(n));
+        const ids = Array.from(
+          new Set(
+            (mapRows as any[])
+              .map((r) => Number(r.docente_id))
+              .filter((n) => Number.isFinite(n))
+          )
+        );
         if (ids.length > 0) {
           const { data: docs, error: docsErr } = await supabase
             .from('docentes')
@@ -217,7 +223,7 @@ function FormByRole({
         }
       }
 
-      // 2) Fallback: todos los docentes
+      // 2) fallback: todos los docentes (para no dejar vacío)
       const { data: all, error: errAll } = await supabase
         .from('docentes')
         .select('id, nombre, nombres, apellidos')
@@ -234,13 +240,14 @@ function FormByRole({
           }))
         );
       } else {
-        console.error('No fue posible cargar docentes:', errAll);
+        console.error('docentes fallback error:', errAll);
         setDocentes([]);
       }
       setDocenteId('');
     })();
-  }, [cursoId, cursos]);
+  }, [cursoId]);
 
+  // Agrupar preguntas por categoría
   const porCategoria = useMemo(() => {
     const g: Record<string, Item[]> = {};
     (items ?? []).forEach((it) => {
@@ -253,15 +260,15 @@ function FormByRole({
   const setValor = (id: number, v: number | string) =>
     setVals((p) => ({ ...p, [id]: Number(v) }));
 
-  // Cuándo exigir docente
+  // ¿Cuándo exigir docente?
   const requiereDocente = role === 'estudiante' || target === 'docente';
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMsg(null);
 
-    if (!cursoId) { setMsg('⚠ Selecciona el curso.'); return; }
     if (!modalidad) { setMsg('⚠ Selecciona la modalidad.'); return; }
+    if (!cursoId) { setMsg('⚠ Selecciona el curso.'); return; }
     if (requiereDocente && !docenteId) { setMsg('⚠ Selecciona el docente.'); return; }
     if (target === 'coord' && !coordAsigId.trim()) { setMsg('⚠ Ingresa el ID del coordinador/a.'); return; }
 
@@ -288,7 +295,7 @@ function FormByRole({
       setAMejorar('');
       setDocenteId('');
       setCoordAsigId('');
-      // Mantengo curso y modalidad
+      // Mantenemos modalidad y curso seleccionados
     }
   };
 
@@ -304,25 +311,7 @@ function FormByRole({
 
       <form onSubmit={onSubmit} className="space-y-6">
         <div className="grid sm:grid-cols-2 gap-3">
-          {/* Curso desde catálogo */}
-          <div>
-            <label className="label">Curso</label>
-            <select
-              className="input"
-              value={cursoId}
-              onChange={(e) => setCursoId(e.target.value)}
-              required
-            >
-              <option value="">Seleccione…</option>
-              {cursos.map((c) => (
-                <option key={c.curso_id} value={c.curso_id}>
-                  {c.curso_id}{c.nombre ? ` — ${c.nombre}` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Modalidad (solo Presencial | Distancia) */}
+          {/* 1) Modalidad */}
           <div>
             <label className="label">Modalidad</label>
             <select
@@ -337,7 +326,28 @@ function FormByRole({
             </select>
           </div>
 
-          {/* Docente (según curso) */}
+          {/* 2) Curso (filtrado por modalidad) */}
+          <div>
+            <label className="label">Curso</label>
+            <select
+              className="input"
+              value={cursoId}
+              onChange={(e) => setCursoId(e.target.value)}
+              required
+              disabled={!modalidad}
+            >
+              <option value="">
+                {modalidad ? 'Seleccione…' : 'Elija modalidad primero'}
+              </option>
+              {cursosFiltrados.map((c) => (
+                <option key={c.curso_id} value={c.curso_id}>
+                  {c.curso_id}{c.nombre ? ` — ${c.nombre}` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 3) Docente (según curso) */}
           {requiereDocente && (
             <div className="sm:col-span-2">
               <label className="label">Docente</label>
@@ -348,7 +358,9 @@ function FormByRole({
                 required
                 disabled={!cursoId}
               >
-                <option value="">{cursoId ? 'Seleccione…' : 'Elija un curso primero'}</option>
+                <option value="">
+                  {cursoId ? 'Seleccione…' : 'Elija un curso primero'}
+                </option>
                 {docentes.map((d) => (
                   <option key={d.id} value={d.id}>{d.display}</option>
                 ))}
@@ -356,7 +368,7 @@ function FormByRole({
             </div>
           )}
 
-          {/* Coordinador/a de asignatura ID (solo target="coord") */}
+          {/* ID de coord (solo target="coord") */}
           {target === 'coord' && (
             <div className="sm:col-span-2">
               <label className="label">Coordinador/a de asignatura ID</label>
