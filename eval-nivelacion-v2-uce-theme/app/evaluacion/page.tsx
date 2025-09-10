@@ -119,20 +119,39 @@ function FormByRole({
   const [msg, setMsg] = useState<string | null>(null);
 
   // Carga preguntas + catálogo (solo con sesión)
-  useEffect(() => {
-    let on = true;
-    (async () => {
-      setLoading(true);
+ useEffect(() => {
+  let alive = true;
+  (async () => {
+    const { data, error } = await supabase
+      .from('vw_roles_permitidos')
+      .select('rol');
 
-      const { data: s } = await supabase.auth.getSession();
-      if (!on) return;
-      if (!s?.session) {
-        setShowLogin(true);
-        setItems(null);
-        setCursos([]);
-        setLoading(false);
-        return;
-      }
+    if (!alive) return;
+
+    // Normaliza: 'docente' (BD) -> 'auto_docente' (app)
+    const fromDB = !error ? (data ?? []) : [];
+    const normalized = fromDB.map((r: any) =>
+      (String(r.rol) === 'docente' ? 'auto_docente' : String(r.rol))
+    ) as Rol[];
+
+    // 🔒 Filtro blindado:
+    // 1) Si tiene auto_docente -> SOLO auto_docente
+    // 2) Si hay roles distintos de estudiante -> quitamos 'estudiante'
+    // 3) Si no hay nada -> estudiante
+    let finalRoles: Rol[];
+    if (normalized.includes('auto_docente')) {
+      finalRoles = ['auto_docente'];
+    } else {
+      const noStudent = normalized.filter(r => r !== 'estudiante') as Rol[];
+      finalRoles = noStudent.length > 0 ? noStudent : (['estudiante'] as Rol[]);
+    }
+
+    setRoles(finalRoles);
+    if (finalRoles.length === 1) setSelected(finalRoles[0]);
+    console.log('vw_roles_permitidos ->', normalized, 'finalRoles ->', finalRoles);
+  })();
+  return () => { alive = false; };
+}, []);
 
       // Preguntas para el rol seleccionado
       const periodo = '2025-2025';
