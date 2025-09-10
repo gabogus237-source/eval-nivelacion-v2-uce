@@ -440,54 +440,33 @@ const LABELS: Record<Rol, string> = {
 };
 
 function mapWhitelistToApp(r: string): Rol {
-  // En whitelist puede venir 'docente'; en la app usamos 'auto_docente'
   return (r === 'docente' ? 'auto_docente' : r) as Rol;
 }
 
 export default function Page() {
-  const [userEmail, setUserEmail] = useState<string>('');
   const [roles, setRoles] = useState<Rol[] | null>(null);
   const [selected, setSelected] = useState<Rol | ''>('');
 
   useEffect(() => {
     let alive = true;
     (async () => {
-      // 1) Usuario actual
-      const { data: u } = await supabase.auth.getUser();
-      const email = u?.user?.email?.toLowerCase() ?? '';
-      if (!alive) return;
-      setUserEmail(email);
-
-      // 2) Si no hay sesión o no es @uce.edu.ec → solo Estudiante
-      if (!email || !/@uce\.edu\.ec$/i.test(email)) {
-        const only = ['estudiante'] as Rol[];
-        setRoles(only);
-        setSelected('estudiante');
-        return;
-      }
-
-      // 3) Cargar roles permitidos desde la vista (si no existe, asegúrate de crear vw_roles_permitidos)
       const { data, error } = await supabase
         .from('vw_roles_permitidos')
         .select('rol');
-      if (error) {
-        const only = ['estudiante'] as Rol[];
-        setRoles(only);
-        setSelected('estudiante');
-        return;
-      }
 
-      // Normaliza, garantiza que siempre esté 'estudiante' y deja únicos
-      const allowed = (data ?? []).map((r: any) => mapWhitelistToApp(String(r.rol)));
-      const unique = Array.from(new Set<Rol>(['estudiante', ...(allowed as Rol[])]));
+      if (!alive) return;
 
-      setRoles(unique);
-      if (unique.length === 1) setSelected(unique[0]); // si solo hay Estudiante, lo fija
+      const fromDB = !error ? (data ?? []) : [];
+      const normalized = fromDB.map((r: any) => mapWhitelistToApp(String(r.rol))) as Rol[];
+
+      // Si la vista no devolvió nada por algún motivo, fallback a estudiante
+      const finalRoles = normalized.length > 0 ? normalized : (['estudiante'] as Rol[]);
+      setRoles(finalRoles);
+      if (finalRoles.length === 1) setSelected(finalRoles[0]); // auto-selecciona si hay solo uno
     })();
     return () => { alive = false; };
   }, []);
 
-  // UI
   if (roles === null) return <div className="p-6">Cargando roles…</div>;
 
   const target =
@@ -499,7 +478,7 @@ export default function Page() {
     <main className="max-w-4xl mx-auto p-6 space-y-6">
       <h1 className="text-2xl font-bold">Evaluación Docente – FCA</h1>
 
-      {/* Paso 1: Selección de rol (si no quedó definido automáticamente) */}
+      {/* Paso 1: Selección de rol (solo los permitidos) */}
       <section className="space-y-2">
         <label className="font-medium">1) Selecciona tu rol</label>
         <select
@@ -509,16 +488,9 @@ export default function Page() {
         >
           <option value="">— Elige —</option>
           {roles.map((r) => (
-            <option key={r} value={r}>
-              {LABELS[r]}
-            </option>
+            <option key={r} value={r}>{LABELS[r]}</option>
           ))}
         </select>
-        {!userEmail && (
-          <p className="text-xs text-gray-500">
-            Si no has iniciado sesión, el formulario te pedirá tu correo institucional.
-          </p>
-        )}
       </section>
 
       {/* Paso 2+: Formulario según rol */}
