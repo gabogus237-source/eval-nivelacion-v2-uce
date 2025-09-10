@@ -28,7 +28,6 @@ function normMod(raw: string | null | undefined): '' | 'presencial' | 'distancia
   const s = (raw ?? '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim();
   if (s.includes('presen')) return 'presencial';
   if (s.includes('dist')) return 'distancia';
-  // Cualquier otro valor (virtual, mixta, etc.) no participa
   return '';
 }
 
@@ -135,7 +134,7 @@ function FormByRole({
         return;
       }
 
-      // Preguntas
+      // Preguntas para el rol seleccionado
       const periodo = '2025-2025';
       const { data, error } = await supabase.rpc('get_preguntas_para', {
         rol_in: role,
@@ -300,7 +299,7 @@ function FormByRole({
 
       <form onSubmit={onSubmit} className="space-y-6">
         <div className="grid sm:grid-cols-2 gap-3">
-          {/* 1) Modalidad — SOLO estas dos opciones */}
+          {/* 1) Modalidad */}
           <div>
             <label className="label">Modalidad</label>
             <select
@@ -315,7 +314,7 @@ function FormByRole({
             </select>
           </div>
 
-          {/* 2) Curso (filtrado por modalidad con normalización) */}
+          {/* 2) Curso (filtrado por modalidad) */}
           <div>
             <label className="label">Curso</label>
             <select
@@ -336,7 +335,7 @@ function FormByRole({
             </select>
           </div>
 
-          {/* 3) Docente del curso */}
+          {/* 3) Docente del curso (solo estudiante o auto_docente) */}
           {requiereDocente && (
             <div className="sm:col-span-2">
               <label className="label">Docente</label>
@@ -439,6 +438,7 @@ const LABELS: Record<Rol, string> = {
   coord_nivelacion: 'Coordinadora de Nivelación',
 };
 
+// Mapea lo que devuelve la vista (puede ser 'docente') al rol interno que tu RPC espera
 function mapWhitelistToApp(r: string): Rol {
   return (r === 'docente' ? 'auto_docente' : r) as Rol;
 }
@@ -456,13 +456,13 @@ export default function Page() {
 
       if (!alive) return;
 
+      // Solo lo que devuelva la vista: si estás en whitelist → tus roles; si no → estudiante
       const fromDB = !error ? (data ?? []) : [];
       const normalized = fromDB.map((r: any) => mapWhitelistToApp(String(r.rol))) as Rol[];
 
-      // Si la vista no devolvió nada por algún motivo, fallback a estudiante
       const finalRoles = normalized.length > 0 ? normalized : (['estudiante'] as Rol[]);
       setRoles(finalRoles);
-      if (finalRoles.length === 1) setSelected(finalRoles[0]); // auto-selecciona si hay solo uno
+      if (finalRoles.length === 1) setSelected(finalRoles[0]); // autoselecciona si hay uno
     })();
     return () => { alive = false; };
   }, []);
@@ -478,7 +478,7 @@ export default function Page() {
     <main className="max-w-4xl mx-auto p-6 space-y-6">
       <h1 className="text-2xl font-bold">Evaluación Docente – FCA</h1>
 
-      {/* Paso 1: Selección de rol (solo los permitidos) */}
+      {/* Paso 1: Selección de rol (solo los permitidos por la vista) */}
       <section className="space-y-2">
         <label className="font-medium">1) Selecciona tu rol</label>
         <select
