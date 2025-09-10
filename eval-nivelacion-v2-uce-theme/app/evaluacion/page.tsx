@@ -432,74 +432,104 @@ function FormByRole({
 }
 
 /* ===== Página ===== */
+const LABELS: Record<Rol, string> = {
+  estudiante: 'Estudiante',
+  auto_docente: 'Docente',
+  coord_asignatura: 'Coordinador de Asignatura',
+  coord_nivelacion: 'Coordinadora de Nivelación',
+};
+
+function mapWhitelistToApp(r: string): Rol {
+  // En whitelist puede venir 'docente'; en la app usamos 'auto_docente'
+  return (r === 'docente' ? 'auto_docente' : r) as Rol;
+}
+
 export default function Page() {
   const [userEmail, setUserEmail] = useState<string>('');
   const [roles, setRoles] = useState<Rol[] | null>(null);
+  const [selected, setSelected] = useState<Rol | ''>('');
 
   useEffect(() => {
     let alive = true;
     (async () => {
+      // 1) Usuario actual
       const { data: u } = await supabase.auth.getUser();
       const email = u?.user?.email?.toLowerCase() ?? '';
       if (!alive) return;
       setUserEmail(email);
 
-      if (!email) { setRoles(['estudiante']); return; }
-      if (!email.endsWith('@uce.edu.ec')) { setRoles(['estudiante']); return; }
+      // 2) Si no hay sesión o no es @uce.edu.ec → solo Estudiante
+      if (!email || !/@uce\.edu\.ec$/i.test(email)) {
+        const only = ['estudiante'] as Rol[];
+        setRoles(only);
+        setSelected('estudiante');
+        return;
+      }
 
-      const { data, error } = await supabase.rpc('api_current_roles');
-      if (!alive) return;
-      if (error) setRoles(['estudiante']);
-      else setRoles((data ?? []) as Rol[]);
+      // 3) Cargar roles permitidos desde la vista (si no existe, asegúrate de crear vw_roles_permitidos)
+      const { data, error } = await supabase
+        .from('vw_roles_permitidos')
+        .select('rol');
+      if (error) {
+        const only = ['estudiante'] as Rol[];
+        setRoles(only);
+        setSelected('estudiante');
+        return;
+      }
+
+      // Normaliza, garantiza que siempre esté 'estudiante' y deja únicos
+      const allowed = (data ?? []).map((r: any) => mapWhitelistToApp(String(r.rol)));
+      const unique = Array.from(new Set<Rol>(['estudiante', ...(allowed as Rol[])]));
+
+      setRoles(unique);
+      if (unique.length === 1) setSelected(unique[0]); // si solo hay Estudiante, lo fija
     })();
     return () => { alive = false; };
   }, []);
 
-  if (!roles) return <main className="p-6">Cargando…</main>;
-  const onlyStudent = roles.length === 1 && roles[0] === 'estudiante';
-  const showDebug = process.env.NEXT_PUBLIC_SHOW_ROLE_DEBUG === '1';
+  // UI
+  if (roles === null) return <div className="p-6">Cargando roles…</div>;
+
+  const target =
+    selected === 'coord_asignatura' ? 'coord'
+    : selected === 'auto_docente'   ? 'docente'
+    : null;
 
   return (
-    <main className="space-y-10">
-      {showDebug && (
-        <div className="p-3 rounded-lg border bg-yellow-50 text-sm">
-          <div><b>DEBUG</b></div>
-          <div>Email: {userEmail || '(sin sesión)'}</div>
-          <div>Roles: {roles.join(', ') || '(vacío)'}</div>
-        </div>
-      )}
+    <main className="max-w-4xl mx-auto p-6 space-y-6">
+      <h1 className="text-2xl font-bold">Evaluación Docente – FCA</h1>
 
-      {roles.includes('estudiante') && (
-        <FormByRole role="estudiante" slug="estudiante" title="EVALUACIÓN DE ESTUDIANTES" />
-      )}
-      {!onlyStudent && roles.includes('auto_docente') && (
-        <FormByRole role="auto_docente" slug="auto" title="AUTOEVALUACIÓN" />
-      )}
-      {!onlyStudent && roles.includes('coord_asignatura') && (
+      {/* Paso 1: Selección de rol (si no quedó definido automáticamente) */}
+      <section className="space-y-2">
+        <label className="font-medium">1) Selecciona tu rol</label>
+        <select
+          className="w-full border rounded p-2"
+          value={selected}
+          onChange={(e) => setSelected(e.target.value as Rol)}
+        >
+          <option value="">— Elige —</option>
+          {roles.map((r) => (
+            <option key={r} value={r}>
+              {LABELS[r]}
+            </option>
+          ))}
+        </select>
+        {!userEmail && (
+          <p className="text-xs text-gray-500">
+            Si no has iniciado sesión, el formulario te pedirá tu correo institucional.
+          </p>
+        )}
+      </section>
+
+      {/* Paso 2+: Formulario según rol */}
+      {selected && (
         <FormByRole
-          role="coord_asignatura"
-          slug="coord-asig"
-          target="docente"
-          title="EVALUACIÓN (Coordinador/a de Asignatura → docentes)"
+          role={selected}
+          slug=""
+          target={target}
+          title={`Instrumento – ${LABELS[selected]}`}
         />
-      )}
-      {!onlyStudent && roles.includes('coord_nivelacion') && (
-        <>
-          <FormByRole
-            role="coord_nivelacion"
-            slug="coord-nivel-docentes"
-            target="docente"
-            title="EVALUACIÓN (Coordinación de Nivelación → docentes)"
-          />
-          <FormByRole
-            role="coord_nivelacion"
-            slug="coord-nivel-coord"
-            target="coord"
-            title="EVALUACIÓN (Coordinación de Nivelación → coordinadores de asignatura)"
-          />
-        </>
       )}
     </main>
   );
 }
-
