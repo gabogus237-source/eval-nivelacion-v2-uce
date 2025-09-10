@@ -25,7 +25,11 @@ type Docente = { id: number; display: string };
 
 /* ===== Helpers ===== */
 function normMod(raw: string | null | undefined): '' | 'presencial' | 'distancia' {
-  const s = (raw ?? '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim();
+  const s = (raw ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .trim();
   if (s.includes('presen')) return 'presencial';
   if (s.includes('dist')) return 'distancia';
   return '';
@@ -57,7 +61,9 @@ function InlineMagicLink() {
     return (
       <div className="max-w-md mx-auto p-6 bg-white rounded-2xl shadow">
         <h1 className="text-xl font-semibold mb-2">Revisa tu correo</h1>
-        <p>Te enviamos un enlace a tu <b>@uce.edu.ec</b>. Ábrelo para iniciar sesión.</p>
+        <p>
+          Te enviamos un enlace a tu <b>@uce.edu.ec</b>. Ábrelo para iniciar sesión.
+        </p>
       </div>
     );
   }
@@ -65,7 +71,9 @@ function InlineMagicLink() {
   return (
     <div className="max-w-md mx-auto p-6 bg-white rounded-2xl shadow">
       <h1 className="text-xl font-semibold mb-4">Inicia sesión</h1>
-      <p className="text-sm mb-4">Usa tu correo institucional <b>@uce.edu.ec</b>.</p>
+      <p className="text-sm mb-4">
+        Usa tu correo institucional <b>@uce.edu.ec</b>.
+      </p>
       <form onSubmit={submit} className="space-y-3">
         <input
           type="email"
@@ -119,39 +127,20 @@ function FormByRole({
   const [msg, setMsg] = useState<string | null>(null);
 
   // Carga preguntas + catálogo (solo con sesión)
- useEffect(() => {
-  let alive = true;
-  (async () => {
-    const { data, error } = await supabase
-      .from('vw_roles_permitidos')
-      .select('rol');
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      setLoading(true);
 
-    if (!alive) return;
-
-    // Normaliza: 'docente' (BD) -> 'auto_docente' (app)
-    const fromDB = !error ? (data ?? []) : [];
-    const normalized = fromDB.map((r: any) =>
-      (String(r.rol) === 'docente' ? 'auto_docente' : String(r.rol))
-    ) as Rol[];
-
-    // 🔒 Filtro blindado:
-    // 1) Si tiene auto_docente -> SOLO auto_docente
-    // 2) Si hay roles distintos de estudiante -> quitamos 'estudiante'
-    // 3) Si no hay nada -> estudiante
-    let finalRoles: Rol[];
-    if (normalized.includes('auto_docente')) {
-      finalRoles = ['auto_docente'];
-    } else {
-      const noStudent = normalized.filter(r => r !== 'estudiante') as Rol[];
-      finalRoles = noStudent.length > 0 ? noStudent : (['estudiante'] as Rol[]);
-    }
-
-    setRoles(finalRoles);
-    if (finalRoles.length === 1) setSelected(finalRoles[0]);
-    console.log('vw_roles_permitidos ->', normalized, 'finalRoles ->', finalRoles);
-  })();
-  return () => { alive = false; };
-}, []);
+      const { data: s } = await supabase.auth.getSession();
+      if (!on) return;
+      if (!s?.session) {
+        setShowLogin(true);
+        setItems(null);
+        setCursos([]);
+        setLoading(false);
+        return;
+      }
 
       // Preguntas para el rol seleccionado
       const periodo = '2025-2025';
@@ -175,7 +164,9 @@ function FormByRole({
 
       setLoading(false);
     })();
-    return () => { on = false; };
+    return () => {
+      on = false;
+    };
   }, [role]);
 
   // Cursos filtrados por modalidad elegida (con normalización)
@@ -200,7 +191,7 @@ function FormByRole({
       return;
     }
     (async () => {
-      // 1) ids de la tabla de mapeo
+      // 1) ids de la tabla de mapeo (ajusta el nombre si tu tabla real es otra, p.ej. carga_docente)
       const { data: mapRows, error: mapErr } = await supabase
         .from('coordinadores_docentes')
         .select('docente_id')
@@ -279,17 +270,30 @@ function FormByRole({
     e.preventDefault();
     setMsg(null);
 
-    if (!modalidad) { setMsg('⚠ Selecciona la modalidad.'); return; }
-    if (!cursoId) { setMsg('⚠ Selecciona el curso.'); return; }
-    if (requiereDocente && !docenteId) { setMsg('⚠ Selecciona el docente.'); return; }
-    if (target === 'coord' && !coordAsigId.trim()) { setMsg('⚠ Ingresa el ID del coordinador/a.'); return; }
+    if (!modalidad) {
+      setMsg('⚠ Selecciona la modalidad.');
+      return;
+    }
+    if (!cursoId) {
+      setMsg('⚠ Selecciona el curso.');
+      return;
+    }
+    if (requiereDocente && !docenteId) {
+      setMsg('⚠ Selecciona el docente.');
+      return;
+    }
+    if (target === 'coord' && !coordAsigId.trim()) {
+      setMsg('⚠ Ingresa el ID del coordinador/a.');
+      return;
+    }
 
     const payload: any = {
       rol: role,
       modalidad,
       curso_id: cursoId,
       docente_id: requiereDocente ? Number(docenteId) : null,
-      coord_asignatura_id: target === 'coord' ? (coordAsigId ? Number(coordAsigId) : null) : null,
+      coord_asignatura_id:
+        target === 'coord' ? (coordAsigId ? Number(coordAsigId) : null) : null,
       no_aplica: false,
       respuestas: vals,
       lo_mejor: loMejor || null,
@@ -310,7 +314,8 @@ function FormByRole({
 
   if (loading) return <div className="p-4">Cargando preguntas…</div>;
   if (showLogin) return <InlineMagicLink />;
-  if (!items || items.length === 0) return <div className="p-4">No hay preguntas para este instrumento.</div>;
+  if (!items || items.length === 0)
+    return <div className="p-4">No hay preguntas para este instrumento.</div>;
 
   return (
     <section className="card space-y-6">
@@ -343,10 +348,13 @@ function FormByRole({
               required
               disabled={!modalidad}
             >
-              <option value="">{modalidad ? 'Seleccione…' : 'Elija modalidad primero'}</option>
+              <option value="">
+                {modalidad ? 'Seleccione…' : 'Elija modalidad primero'}
+              </option>
               {cursosFiltrados.map((c) => (
                 <option key={c.curso_id} value={c.curso_id}>
-                  {c.curso_id}{c.nombre ? ` — ${c.nombre}` : ''}
+                  {c.curso_id}
+                  {c.nombre ? ` — ${c.nombre}` : ''}
                 </option>
               ))}
             </select>
@@ -363,9 +371,13 @@ function FormByRole({
                 required
                 disabled={!cursoId}
               >
-                <option value="">{cursoId ? 'Seleccione…' : 'Elija un curso primero'}</option>
+                <option value="">
+                  {cursoId ? 'Seleccione…' : 'Elija un curso primero'}
+                </option>
                 {docentes.map((d) => (
-                  <option key={d.id} value={d.id}>{d.display}</option>
+                  <option key={d.id} value={d.id}>
+                    {d.display}
+                  </option>
                 ))}
               </select>
             </div>
@@ -391,10 +403,15 @@ function FormByRole({
             <h3 className="font-semibold mb-3">{cat}</h3>
             <div className="space-y-3">
               {arr.map((it) => (
-                <div key={it.pregunta_id} className="grid md:grid-cols-2 gap-2 items-center">
+                <div
+                  key={it.pregunta_id}
+                  className="grid md:grid-cols-2 gap-2 items-center"
+                >
                   <div className="text-sm">{it.pregunta}</div>
                   <div className="flex gap-3 justify-start md:justify-end">
-                    {Array.from({ length: it.escala_max - it.escala_min + 1 }).map((_, i) => {
+                    {Array.from({
+                      length: it.escala_max - it.escala_min + 1,
+                    }).map((_, i) => {
                       const v = it.escala_min + i;
                       return (
                         <label key={v} className="inline-flex items-center gap-1">
@@ -462,6 +479,7 @@ export default function Page() {
   const [roles, setRoles] = useState<Rol[] | null>(null);
   const [selected, setSelected] = useState<Rol | ''>('');
 
+  // ← CARGA DE ROLES (EN LA PÁGINA, NO EN FormByRole)
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -471,17 +489,28 @@ export default function Page() {
 
       if (!alive) return;
 
-      // Solo lo que devuelva la vista:
-      // - En whitelist → sus roles (e.g., 'docente' -> 'auto_docente')
-      // - No whitelist → 'estudiante'
       const fromDB = !error ? (data ?? []) : [];
-      const normalized = fromDB.map((r: any) => mapWhitelistToApp(String(r.rol))) as Rol[];
+      const normalized = fromDB.map((r: any) =>
+        mapWhitelistToApp(String(r.rol))
+      ) as Rol[];
 
-      const finalRoles = normalized.length > 0 ? normalized : (['estudiante'] as Rol[]);
+      // Filtro “blindado”
+      let finalRoles: Rol[];
+      if (normalized.includes('auto_docente')) {
+        finalRoles = ['auto_docente'];
+      } else {
+        const noStudent = normalized.filter((r) => r !== 'estudiante') as Rol[];
+        finalRoles = noStudent.length > 0 ? noStudent : (['estudiante'] as Rol[]);
+      }
+
       setRoles(finalRoles);
-      if (finalRoles.length === 1) setSelected(finalRoles[0]); // autoselección si hay 1
+      if (finalRoles.length === 1) setSelected(finalRoles[0]);
+      // Debug opcional:
+      // console.log('vw_roles_permitidos ->', normalized, 'final ->', finalRoles);
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
   if (roles === null) return <div className="p-6">Cargando roles…</div>;
@@ -505,7 +534,9 @@ export default function Page() {
         >
           <option value="">— Elige —</option>
           {roles.map((r) => (
-            <option key={r} value={r}>{LABELS[r]}</option>
+            <option key={r} value={r}>
+              {LABELS[r]}
+            </option>
           ))}
         </select>
       </section>
