@@ -324,9 +324,7 @@ function FormByRole({
               required
               disabled={!modalidad}
             >
-              <option value="">
-                {modalidad ? 'Seleccione…' : 'Elija modalidad primero'}
-              </option>
+              <option value="">{modalidad ? 'Seleccione…' : 'Elija modalidad primero'}</option>
               {cursosFiltrados.map((c) => (
                 <option key={c.curso_id} value={c.curso_id}>
                   {c.curso_id}{c.nombre ? ` — ${c.nombre}` : ''}
@@ -346,9 +344,7 @@ function FormByRole({
                 required
                 disabled={!cursoId}
               >
-                <option value="">
-                  {cursoId ? 'Seleccione…' : 'Elija un curso primero'}
-                </option>
+                <option value="">{cursoId ? 'Seleccione…' : 'Elija un curso primero'}</option>
                 {docentes.map((d) => (
                   <option key={d.id} value={d.id}>{d.display}</option>
                 ))}
@@ -438,7 +434,7 @@ const LABELS: Record<Rol, string> = {
   coord_nivelacion: 'Coordinadora de Nivelación',
 };
 
-// Mapea lo que devuelve la vista (puede ser 'docente') al rol interno que tu RPC espera
+// Mapea lo que devuelve la vista (puede venir 'docente') al rol interno que usa tu RPC
 function mapWhitelistToApp(r: string): Rol {
   return (r === 'docente' ? 'auto_docente' : r) as Rol;
 }
@@ -456,13 +452,15 @@ export default function Page() {
 
       if (!alive) return;
 
-      // Solo lo que devuelva la vista: si estás en whitelist → tus roles; si no → estudiante
+      // Solo lo que devuelva la vista:
+      // - En whitelist → sus roles (e.g., 'docente' -> 'auto_docente')
+      // - No whitelist → 'estudiante'
       const fromDB = !error ? (data ?? []) : [];
       const normalized = fromDB.map((r: any) => mapWhitelistToApp(String(r.rol))) as Rol[];
 
       const finalRoles = normalized.length > 0 ? normalized : (['estudiante'] as Rol[]);
       setRoles(finalRoles);
-      if (finalRoles.length === 1) setSelected(finalRoles[0]); // autoselecciona si hay uno
+      if (finalRoles.length === 1) setSelected(finalRoles[0]); // autoselección si hay 1
     })();
     return () => { alive = false; };
   }, []);
