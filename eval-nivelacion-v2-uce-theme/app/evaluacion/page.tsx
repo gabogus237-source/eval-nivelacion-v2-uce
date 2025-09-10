@@ -22,6 +22,7 @@ type Curso = {
 };
 
 type Docente = { id: number; display: string };
+type Mod = { codigo: string; nombre: string | null };
 
 /* ===== Helpers ===== */
 function normMod(raw: string | null | undefined): '' | 'presencial' | 'distancia' {
@@ -109,6 +110,7 @@ function FormByRole({
   const [showLogin, setShowLogin] = useState(false);
 
   // Catálogo y selección
+  const [modalidades, setModalidades] = useState<Mod[]>([]);
   const [cursos, setCursos] = useState<Curso[]>([]);
   const [modalidad, setModalidad] = useState(''); // Presencial | Distancia
   const [cursoId, setCursoId] = useState('');
@@ -126,7 +128,7 @@ function FormByRole({
   const [aMejorar, setAMejorar] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
 
-  // Carga preguntas + catálogo (solo con sesión)
+  // Carga preguntas + catálogos (solo con sesión)
   useEffect(() => {
     let on = true;
     (async () => {
@@ -138,6 +140,7 @@ function FormByRole({
         setShowLogin(true);
         setItems(null);
         setCursos([]);
+        setModalidades([]);
         setLoading(false);
         return;
       }
@@ -149,18 +152,24 @@ function FormByRole({
         periodo_in: periodo,
       });
       if (!on) return;
-      if (error) setItems([]);
-      else setItems((data ?? []) as Item[]);
+      setItems(error ? [] : ((data ?? []) as Item[]));
 
       // Catálogo de cursos (todos; filtramos en cliente con normalización)
       const { data: cat, error: errCat } = await supabase
         .from('catalogo_cursos')
         .select('curso_id, modalidad, nombre')
         .order('curso_id', { ascending: true });
-
       if (!on) return;
-      if (errCat) setCursos([]);
-      else setCursos((cat ?? []) as Curso[]);
+      setCursos(errCat ? [] : ((cat ?? []) as Curso[]));
+
+      // Catálogo de modalidades — SOLO Presencial y Distancia
+      const { data: mods } = await supabase
+        .from('catalogo_modalidad')
+        .select('codigo, nombre')
+        .in('codigo', ['Presencial', 'Distancia'])
+        .order('codigo', { ascending: true });
+      if (!on) return;
+      setModalidades((mods ?? []) as Mod[]);
 
       setLoading(false);
     })();
@@ -191,7 +200,7 @@ function FormByRole({
       return;
     }
     (async () => {
-      // 1) ids de la tabla de mapeo (ajusta el nombre si tu tabla real es otra, p.ej. carga_docente)
+      // 1) ids de la tabla de mapeo
       const { data: mapRows, error: mapErr } = await supabase
         .from('coordinadores_docentes')
         .select('docente_id')
@@ -323,7 +332,7 @@ function FormByRole({
 
       <form onSubmit={onSubmit} className="space-y-6">
         <div className="grid sm:grid-cols-2 gap-3">
-          {/* 1) Modalidad */}
+          {/* 1) Modalidad — viene de BD (solo 2 opciones) */}
           <div>
             <label className="label">Modalidad</label>
             <select
@@ -333,8 +342,11 @@ function FormByRole({
               required
             >
               <option value="">Seleccione…</option>
-              <option value="Presencial">Presencial</option>
-              <option value="Distancia">Distancia</option>
+              {modalidades.map((m) => (
+                <option key={m.codigo} value={m.codigo}>
+                  {m.nombre ?? m.codigo}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -479,7 +491,7 @@ export default function Page() {
   const [roles, setRoles] = useState<Rol[] | null>(null);
   const [selected, setSelected] = useState<Rol | ''>('');
 
-  // ← CARGA DE ROLES (EN LA PÁGINA, NO EN FormByRole)
+  // CARGA DE ROLES (EN LA PÁGINA, NO EN FormByRole)
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -505,8 +517,6 @@ export default function Page() {
 
       setRoles(finalRoles);
       if (finalRoles.length === 1) setSelected(finalRoles[0]);
-      // Debug opcional:
-      // console.log('vw_roles_permitidos ->', normalized, 'final ->', finalRoles);
     })();
     return () => {
       alive = false;
